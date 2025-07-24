@@ -1,0 +1,53 @@
+event_pool_1 = []
+event_pool_2 = []
+
+event_index_1 = 0
+event_index_2 = 0
+
+tank_status_1 = 0
+tank_status_2 = 0
+tank_value = STARTING_TANK_VALUE
+
+for (time = 0; time < TIME_END; time += TIME_STEP)
+    tank_status_1 = 0     ### [not runing]
+    tank_status_2 = 0     ### [not runing]
+
+    # EVENT 1
+    # if event exist
+    # UPDATE TANK
+    while event_index < len(event_pool)
+        # switch event if ended
+        if time >= event_pool[event_index].time_end
+            # current event ended
+            event_index += 1
+            continue
+    
+        # handle tank state update
+        if time >= event_pool[event_index].time_start
+            # event running
+
+            tank_status = 1     ### [runing]
+            tank_value += event_pool[event_index].speed * TIME_STEP
+
+
+    # EVENT 2
+    # if event exist
+    # UPDATE TANK
+    while event_index < len(event_pool)
+        # switch event if ended
+        if time >= event_pool[event_index].time_end
+            # current event ended
+            event_index += 1
+            continue
+    
+        # handle tank state update
+        if time >= event_pool[event_index].time_start
+            # event running
+
+            tank_status = 1     ### [runing]
+            tank_value += event_pool[event_index].speed * TIME_STEP
+
+    
+    # SEND
+    sendValue()
+    sendStatus()    # todo bo wysyla zbiorczo

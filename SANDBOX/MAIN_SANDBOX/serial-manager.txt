@@ -1,0 +1,12 @@
+SerialManager
+v
+- tanks_ports   # paths
+- signal_port   # path
+- thread_reading_frequency  # in seconds
+- read_data
+
+f
+- read_value
+- read_signal
+
+- reading_thread    

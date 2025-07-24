@@ -1,0 +1,29 @@
+event_pool = []
+event_index = 0
+
+tank_status = 0 # todo
+tank_value = STARTING_TANK_VALUE
+
+for (time = 0; time < TIME_END; time += TIME_STEP)
+    tank_status = 0     ### [not runing]
+
+    # if event exist
+    # UPDATE TANK
+    while event_index < len(event_pool)
+        # switch event if ended
+        if time >= event_pool[event_index].time_end
+            # current event ended
+            event_index += 1
+            continue
+    
+        # handle tank state update
+        if time >= event_pool[event_index].time_start
+            # event running
+
+            tank_status = 1     ### [runing]
+            tank_value += event_pool[event_index].speed * TIME_STEP
+
+    
+    # SEND
+    sendValue()
+    sendStatus()    # todo bo wysyla zbiorczo

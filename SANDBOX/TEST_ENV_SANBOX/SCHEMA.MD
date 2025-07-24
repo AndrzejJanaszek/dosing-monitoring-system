@@ -1,0 +1,7 @@
+```
+.
++-- /environment/
+|   +-- /manager/
+|   +-- /reader/
+|   +-- /sender/
+```

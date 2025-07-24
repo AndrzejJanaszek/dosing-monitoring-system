@@ -1,0 +1,19 @@
+{
+  "scales": [
+    {
+      "id": 0,
+      "master_fd": 4,
+      "slave_path": "/dev/pts/4"
+    },
+    {
+      "id": 1,
+      "master_fd": 6,
+      "slave_path": "/dev/pts/5"
+    }
+  ],
+  "signal": {
+    "id": 0,
+    "master_fd": 8,
+    "slave_path": "/dev/pts/6"
+  }
+}

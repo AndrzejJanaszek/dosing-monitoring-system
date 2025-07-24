@@ -1,0 +1,40 @@
+EVENT_TYPE_COUNT = 2
+TANKS_COUNT = 8
+
+tanks = []
+
+events = []
+# contains EVENT_TYPE_COUNT event pools
+
+event_indexes = [0 for each]
+
+tank_statuses = []      # len = EVENT_TYPE_COUNT
+tank_value = STARTING_TANK_VALUE
+
+for (time = 0; time < TIME_END; time += TIME_STEP)
+    for tank in tanks:
+        
+
+    for (event_type = 0; event_type < EVENT_TYPE_COUNT; event_type += 1)
+        tank_statuses[event_type] = 0     ### [not runing]
+
+        # if event exist
+        # UPDATE TANK
+        while event_indexes[event_type] < len( events[event_type] )
+            # switch event if ended
+            if time >= events[event_type][event_indexes[event_type]].time_end
+                # current event ended
+                event_indexes[event_type] += 1
+                continue
+        
+            # handle tank state update
+            if time >= events[event_type][event_indexes[event_type]].time_start
+                # event running
+
+                tank_statuses[event_type] = 1     ### [runing]
+                tank_value += events[event_type][event_indexes[event_type]].speed * TIME_STEP
+
+    
+    # SEND
+    sendValue()
+    sendStatus()    # todo bo wysyla zbiorczo
