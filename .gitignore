@@ -1,0 +1,20 @@
+# Pliki kompilacji Pythona
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Cache pytest
+.pytest_cache/
+
+# Wirtualne środowiska
+.venv/
+venv/
+
+# Konfiguracje IDE
+.vscode/
+.idea/
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db
