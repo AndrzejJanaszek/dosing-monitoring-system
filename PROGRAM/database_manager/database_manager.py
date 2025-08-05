@@ -1,0 +1,54 @@
+import mysql.connector
+from mysql.connector import Error
+
+class __DatabaseManager:
+    def __init__(self):
+        self.host = None
+        self.user = None
+        self.password = None
+        self.database = None
+        self.connection = None
+
+    def setup_config(self, host="localhost", user="root", password="", database="dosing-rs"):
+        self.host = host
+        self.user = user
+        self.password = password
+        self.database = database
+        self.connection = None
+
+    def connect(self):
+        """Nawiązanie połączenia z bazą (z prostą obsługą błędów)."""
+        try:
+            self.connection = mysql.connector.connect(
+                host=self.host,
+                user=self.user,
+                password=self.password,
+                database=self.database
+            )
+            if self.connection.is_connected():
+                print("Połączono z MySQL")
+        except Error as e:
+            print(f"Błąd połączenia z MySQL: {e}")
+            self.connection = None
+
+    def save_measurement(self, data):
+        """
+        Zapis pojedynczego pomiaru (mock).
+        :param data: Measurement
+        """
+        print(f"[MOCK] Zapis pomiaru: {data}")
+
+    def save_dosage(self, data):
+        """
+        Zapis pojedynczego dozowania (mock).
+        :param data: DosageEvent
+        """
+        print(f"[MOCK] Zapis dozowania: {data}")
+
+    def close(self):
+        """Zamknięcie połączenia z bazą."""
+        if self.connection and self.connection.is_connected():
+            self.connection.close()
+            print("Połączenie z MySQL zamknięte")
+
+database_manager = __DatabaseManager()

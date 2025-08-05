@@ -104,4 +104,4 @@ class __SerialManager:
             conn.close()
         self.signal_serial_connection.close()
 
-serialManager = __SerialManager()
+serial_manager = __SerialManager()
