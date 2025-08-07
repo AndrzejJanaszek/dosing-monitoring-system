@@ -22,8 +22,8 @@ class __SerialManager:
                  tank_serial_paths: Optional[List[str]],
                  signal_serial_path: Optional[str],
                  serial_timeout: Optional[float] = 3.0,
-                 value_read_delay: Optional[float] = 1.0,
-                 signal_read_delay: Optional[float] = 1.0,
+                 value_read_delay: Optional[float] = 0.1,
+                 signal_read_delay: Optional[float] = 0.1,
                  tank_transmition_delimiters: Optional[bool] = True,
                  signal_transmition_delimiters: Optional[bool] = True):
 
@@ -71,6 +71,7 @@ class __SerialManager:
             if data:
                 with self.data_locks["signal"]:
                     self.latest_data["signal"] = data
+                    self.signal_data_event.set()
             threading.Event().wait(self.SIGNAL_READ_DELAY)
 
     def start_threads(self):

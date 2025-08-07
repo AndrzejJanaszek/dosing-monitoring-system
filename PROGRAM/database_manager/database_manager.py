@@ -1,6 +1,9 @@
 import mysql.connector
 from mysql.connector import Error
 
+from models.dosage_event import DosageEvent
+from models.measurement import Measurement
+
 class __DatabaseManager:
     def __init__(self):
         self.host = None
@@ -9,7 +12,7 @@ class __DatabaseManager:
         self.database = None
         self.connection = None
 
-    def setup_config(self, host="localhost", user="root", password="", database="dosing-rs"):
+    def setup_configuration(self, host="localhost", user="root", password="", database="dosing-rs"):
         self.host = host
         self.user = user
         self.password = password
@@ -31,19 +34,19 @@ class __DatabaseManager:
             print(f"Błąd połączenia z MySQL: {e}")
             self.connection = None
 
-    def save_measurement(self, data):
+    def save_measurement(self, data: Measurement):
         """
         Zapis pojedynczego pomiaru (mock).
         :param data: Measurement
         """
         print(f"[MOCK] Zapis pomiaru: {data}")
 
-    def save_dosage(self, data):
+    def save_dosage(self, data: DosageEvent):
         """
         Zapis pojedynczego dozowania (mock).
         :param data: DosageEvent
         """
-        print(f"[MOCK] Zapis dozowania: {data}")
+        data.print_state()
 
     def close(self):
         """Zamknięcie połączenia z bazą."""

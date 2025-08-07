@@ -12,22 +12,34 @@ from header import *
 
 from event_config import tanks as imported_tanks
         
-def send_tank_value(tanks):
-    for tank in tanks:
-        # Wyślij wartość do portu (master_fd) w formacie tekstowym z nową linią
-        msg = f"{tank.value}\n".encode()
-        os.write(tank.port, msg)
+class TransmissionMode(Enum):
+    LINE = "line"
+    ASCII = "ascii"
 
-def send_signals(port, tanks):
+def send_tank_value(tanks, mode: TransmissionMode = TransmissionMode.LINE):
+    for tank in tanks:
+        msg = f"{tank.value}"
+        encoded_msg = encode_message(msg, mode)
+        os.write(tank.port, encoded_msg)
+
+
+def send_signals(port, tanks, mode: TransmissionMode = TransmissionMode.LINE):
     output = {}
 
     for tank in tanks:
         for pin, status in zip(tank.pins, tank.statuses):
             output[str(pin)] = status
 
-    json_str = json.dumps(output, indent=2)
+    json_str = json.dumps(output, separators=(',', ':'), indent=None)
+    encoded_msg = encode_message(json_str, mode)
+    os.write(port, encoded_msg)
 
-    os.write(port, (json_str + "\n").encode("utf-8"))
+
+def encode_message(msg: str, mode: TransmissionMode = TransmissionMode.LINE) -> bytes:
+    if mode == TransmissionMode.ASCII:
+        return b"\x02" + msg.encode("utf-8") + b"\x03"
+    else:
+        return (msg + "\n").encode("utf-8")
 
 def create_tank_connections():
     tank_ports = []
@@ -91,8 +103,13 @@ def simulation(signal_port):
         tanks = copy.deepcopy(imported_tanks)
 
         SIMULATION_TIME_END = 10
-        SIMULATION_TIME_STEP = 1
+        SIMULATION_TIME_STEP = 0.25
         EVENT_TYPES = [EventType.IN.value, EventType.OUT.value]
+
+        # todo jeszcze jeden tryb \n\r czy jakos tak
+        SIGNAL_TRANSITION_MODE = TransmissionMode.ASCII
+        TANK_TRANSITION_MODE = TransmissionMode.ASCII
+
         # DEBUG_MSG_TIME = 2  # time in seconds
 
         # try:
@@ -127,9 +144,9 @@ def simulation(signal_port):
                         break
 
             # SENDING DATA 
-            send_tank_value(tanks)
+            send_tank_value(tanks, TANK_TRANSITION_MODE)
 
-            send_signals(signal_port["master_fd"], tanks)
+            send_signals(signal_port["master_fd"], tanks, SIGNAL_TRANSITION_MODE)
 
 
             # LOOP END TIME INCREMENT
