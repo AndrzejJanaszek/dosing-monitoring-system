@@ -1,0 +1,39 @@
+[ ] przepisanie SENDERA - programu testowego tak aby wszystko było konfigurowalne z poziomu jednego pliku - configu
+
+[ ] dodanie zapisywania scenariuszy?
+
+[ ] db_manager
+ |- [ ] napisać
+ |- [ ] przetestować
+ |- [ ] plik migracyjny czy coś do zapisu schematu bazy danych
+ |      (.sql) i sledzenia zmian
+ |- [ ] TESTY
+
+[ ] Napisanie specyfikacji CONFIGa
+
+[ ] Przepisanie programu tak aby wczytywał CONFIG
+
+[ ] Zaprojektowanie UI/UX
+ |- [ ] wypisanie requirementów
+ |- [ ] projekt graficzny (kartka + figma)
+
+[ ] wykonanie UI :)
+
+[ ] REFRACTORING rozdział funkcji itd na osobne pliki - ustrukturyzowanie
+
+[ ] Error / Exception Handling
+ |- [ ] zastanowić się gdzie program ma obsłużyć wyjatki (np. reconnect)
+ |- [ ] ponowne łączenie
+ |- [ ] odpowiednie komunikatu na starcie (np. przy braku portów, błąd bazy, watków itd.)
+
+[ ] Możliwość print logowania stanu programu (serial connections, db connection, stan zbiorników itd.)
+
+[ ] zastanowienie się nad symulacją - senderem i sposobem automatyzacji konfiguracji portów
+Czyli sender zapisuje jakie porty otwiera a program główny je przyjmuje
+
+[ ] zrobienie dokumentacji
+ |- [ ] dla symulacji - testowania
+ |- [ ] działania programu (koncepcyjne)
+ |- [ ] programu jako kodu
+
+ 
