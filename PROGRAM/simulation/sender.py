@@ -108,7 +108,7 @@ def simulation(signal_port):
 
         tanks = copy.deepcopy(imported_tanks)
 
-        SIMULATION_TIME_STEP = 0.25
+        SIMULATION_TIME_STEP = 0.1
         SIMULATION_TIME_END = 10 + SIMULATION_TIME_STEP
         EVENT_TYPES = [EventType.IN.value, EventType.OUT.value]
 
@@ -150,9 +150,8 @@ def simulation(signal_port):
                         break
 
             # SENDING DATA 
-            send_tank_value(tanks, TANK_TRANSITION_MODE, debug_print=True)
-
             send_signals(signal_port["master_fd"], tanks, SIGNAL_TRANSITION_MODE, debug_print=True)
+            send_tank_value(tanks, TANK_TRANSITION_MODE, debug_print=True)
 
 
             # LOOP END TIME INCREMENT

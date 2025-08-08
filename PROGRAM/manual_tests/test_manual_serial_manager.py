@@ -17,8 +17,8 @@ def test_signal_read():
         tank_serial_paths=[t.port for t in tanks],
         signal_serial_path=CONFIG_SIGNAL_PORT,
         serial_timeout=3,
-        value_read_delay=1,
-        signal_read_delay=1,
+        value_read_delay=0.1,
+        signal_read_delay=0.1,
         tank_transmition_format=TransmitionFormat.ASCII,
         signal_transmition_format=TransmitionFormat.ASCII
     )
