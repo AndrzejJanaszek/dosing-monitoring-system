@@ -1,5 +1,7 @@
 import threading
 from typing import List, Dict, Optional
+
+from models.transmition import TransmitionFormat
 from .serial_wrapper import SerialPortWrapper
 
 class __SerialManager:
@@ -13,7 +15,6 @@ class __SerialManager:
         self.data_locks: Dict[str, threading.Lock] = {}
 
         self._stop_event = threading.Event()
-        # todo signal event
         self.signal_data_event = threading.Event()
 
         self._threads: List[threading.Thread] = []
@@ -24,15 +25,15 @@ class __SerialManager:
                  serial_timeout: Optional[float] = 3.0,
                  value_read_delay: Optional[float] = 0.1,
                  signal_read_delay: Optional[float] = 0.1,
-                 tank_transmition_delimiters: Optional[bool] = True,
-                 signal_transmition_delimiters: Optional[bool] = True):
+                 tank_transmition_format: Optional[TransmitionFormat] = TransmitionFormat.ASCII,
+                 signal_transmition_format: Optional[TransmitionFormat] = TransmitionFormat.ASCII):
 
         self.SERIAL_TIMEOUT = serial_timeout
         self.VALUE_READ_DELAY = value_read_delay
         self.SIGNAL_READ_DELAY = signal_read_delay
 
-        self.TANK_TRANSMITION_DELIM = signal_transmition_delimiters
-        self.SIGNAL_TRANSMITION_DELIM = tank_transmition_delimiters
+        self.TANK_TRANSMITION_FORMAT = tank_transmition_format
+        self.SIGNAL_TRANSMITION_FORMAT = signal_transmition_format
 
         self.tank_serial_paths = tank_serial_paths
         self.signal_serial_path = signal_serial_path
@@ -50,15 +51,20 @@ class __SerialManager:
         self.latest_data["signal"] = ""
         self.data_locks["signal"] = threading.Lock()
 
-    def read_chunk(self, conn: SerialPortWrapper, use_delimiters: bool) -> str:
-        if use_delimiters:
-            return conn.read_until(b'\x02', b'\x03')  # STX to ETX
-        else:
-            return conn.read_line()
+    def read_chunk(self, conn: SerialPortWrapper, transmition_format: TransmitionFormat) -> str:
+        match transmition_format:
+            case TransmitionFormat.ASCII:
+                return conn.read_until(b'\x02', b'\x03')
+            case TransmitionFormat.LINE:
+                return conn.read_line()
+            case TransmitionFormat.CRLF:
+                return conn.read_until(b'\r\n')
+            case _:
+                raise ValueError(f"Unknown transmission format: {transmition_format}")
 
     def _tank_reading_loop(self, conn: SerialPortWrapper, path: str):
         while not self._stop_event.is_set():
-            data = self.read_chunk(conn, use_delimiters=self.TANK_TRANSMITION_DELIM)
+            data = self.read_chunk(conn, transmition_format=self.TANK_TRANSMITION_FORMAT)
             if data:
                 with self.data_locks[path]:
                     self.latest_data[path] = data
@@ -67,7 +73,7 @@ class __SerialManager:
     def _signal_reading_loop(self):
         conn = self.signal_serial_connection
         while not self._stop_event.is_set():
-            data = self.read_chunk(conn, use_delimiters=self.SIGNAL_TRANSMITION_DELIM)
+            data = self.read_chunk(conn, transmition_format=self.SIGNAL_TRANSMITION_FORMAT)
             if data:
                 with self.data_locks["signal"]:
                     self.latest_data["signal"] = data

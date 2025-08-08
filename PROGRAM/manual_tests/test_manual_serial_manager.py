@@ -1,4 +1,5 @@
 import time
+from models.transmition import TransmitionFormat
 from serial_manager.serial_manager import serial_manager
 from simulation.header import Tank
 
@@ -18,12 +19,12 @@ def test_signal_read():
         serial_timeout=3,
         value_read_delay=1,
         signal_read_delay=1,
-        tank_transmition_delimiters=True,
-        signal_transmition_delimiters=True
+        tank_transmition_format=TransmitionFormat.ASCII,
+        signal_transmition_format=TransmitionFormat.ASCII
     )
 
-    # todo:  zmiana nazwy w chuj do zmiany pewnie xd
-    # todo: logika ogólnie
+    # todo: zastanowic sie nad logika tego
+    # czy jest sens wywolywac kilka funkcji
     serial_manager.setup_connections()
     serial_manager.start_threads()
 

@@ -16,14 +16,17 @@ class TransmissionMode(Enum):
     LINE = "line"
     ASCII = "ascii"
 
-def send_tank_value(tanks, mode: TransmissionMode = TransmissionMode.LINE):
+def send_tank_value(tanks, mode: TransmissionMode = TransmissionMode.LINE, debug_print: bool = False):
     for tank in tanks:
         msg = f"{tank.value}"
         encoded_msg = encode_message(msg, mode)
         os.write(tank.port, encoded_msg)
 
+        if debug_print:
+            print(encoded_msg)
 
-def send_signals(port, tanks, mode: TransmissionMode = TransmissionMode.LINE):
+
+def send_signals(port, tanks, mode: TransmissionMode = TransmissionMode.LINE, debug_print: bool = False):
     output = {}
 
     for tank in tanks:
@@ -33,6 +36,9 @@ def send_signals(port, tanks, mode: TransmissionMode = TransmissionMode.LINE):
     json_str = json.dumps(output, separators=(',', ':'), indent=None)
     encoded_msg = encode_message(json_str, mode)
     os.write(port, encoded_msg)
+
+    if debug_print:
+        print(encoded_msg)
 
 
 def encode_message(msg: str, mode: TransmissionMode = TransmissionMode.LINE) -> bytes:
@@ -102,8 +108,8 @@ def simulation(signal_port):
 
         tanks = copy.deepcopy(imported_tanks)
 
-        SIMULATION_TIME_END = 10
         SIMULATION_TIME_STEP = 0.25
+        SIMULATION_TIME_END = 10 + SIMULATION_TIME_STEP
         EVENT_TYPES = [EventType.IN.value, EventType.OUT.value]
 
         # todo jeszcze jeden tryb \n\r czy jakos tak
@@ -144,9 +150,9 @@ def simulation(signal_port):
                         break
 
             # SENDING DATA 
-            send_tank_value(tanks, TANK_TRANSITION_MODE)
+            send_tank_value(tanks, TANK_TRANSITION_MODE, debug_print=True)
 
-            send_signals(signal_port["master_fd"], tanks, SIGNAL_TRANSITION_MODE)
+            send_signals(signal_port["master_fd"], tanks, SIGNAL_TRANSITION_MODE, debug_print=True)
 
 
             # LOOP END TIME INCREMENT

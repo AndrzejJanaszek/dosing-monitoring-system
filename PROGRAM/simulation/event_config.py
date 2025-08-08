@@ -6,9 +6,9 @@ from header import *
 
 event_list = [
     [
-        Event(0,2,100,EventType.IN),
-        Event(4,6,100,EventType.IN),
-        Event(8,9,100,EventType.OUT),
+        Event(0,6,100,EventType.IN),
+        # Event(4,6,100,EventType.IN),
+        Event(2,4,100,EventType.OUT),
     ],
     # [
     #     Event(0,2,1000,EventType.IN),

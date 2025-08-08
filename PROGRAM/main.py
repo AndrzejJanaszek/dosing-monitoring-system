@@ -8,6 +8,7 @@ from database_manager.database_manager import database_manager, __DatabaseManage
 from models.dosage_event import EventType
 from models.measurement import Measurement
 from models.tank import Tank
+from models.transmition import TransmitionFormat
 from serial_manager.serial_manager import serial_manager, __SerialManager
 
 
@@ -44,28 +45,28 @@ def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: 
         # for each tank check state change
         # and handle change
         for tank in tanks:
-            for i, pin in enumerate(tank.pins):
-                if signal[pin] != tank.statuses[i]:
+            for event_type_int, pin in enumerate(tank.pins):
+                if signal[pin] != tank.statuses[event_type_int]:
                     print("state change!")
                     # read tank value
                     data = serial_manager.get_tank_data(tank.port)
                     tank_value = parse_tank_data(data)
-                    # todo contructor that sets timestamp
                     measurement = Measurement(tank_value)
 
                     # ON / OFF --- START / END
                     if signal[pin]:
                         # start
-                        tank.set_event_start(measurement=measurement, event_type=i)
+                        tank.set_event_start(measurement=measurement, event_type=event_type_int)
                     else:
                         # end
-                        tank.set_event_end(measurement=measurement, event_type=i)
+                        tank.set_event_end(measurement=measurement, event_type=event_type_int)
 
-                        database_manager.save_dosage(tank.events[i])
+                        database_manager.save_dosage(tank.events[event_type_int])
 
-                        if i == EventType.FILL.value:
+                        if event_type_int == EventType.FILL.value:
                             tank.collision_points.clear()
-                        # clear data ???
+
+                        tank.events[event_type_int].clear()
 
 def main():
     # load config
@@ -80,19 +81,18 @@ def main():
         
 
     # init serial_manager
-    # todo zmienic delimiters na mode: ascii, line, \n\r
     serial_manager.setup_configuration(
         tank_serial_paths=[t.port for t in tanks],
         signal_serial_path=CONFIG_SIGNAL_PORT,
         serial_timeout=3,
         value_read_delay=0.1,
         signal_read_delay=0.1,
-        tank_transmition_delimiters=True,
-        signal_transmition_delimiters=True
+        tank_transmition_format=TransmitionFormat.ASCII,
+        signal_transmition_format=TransmitionFormat.ASCII
     )
 
-    # todo:  zmiana nazwy w chuj do zmiany pewnie xd
-    # todo: logika ogólnie
+    # todo: zastanowic sie nad logika tego
+    # czy jest sens wywolywac kilka funkcji
     serial_manager.setup_connections()
     serial_manager.start_threads()
 
