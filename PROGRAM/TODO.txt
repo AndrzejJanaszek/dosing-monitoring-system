@@ -1,3 +1,10 @@
+MAIN POINTS:
+
+1. todo ze środowiska testowego -> scenariusze i zapis do plików ścieżek, następnie odczyt tego konfigu w programie głównym (wraz z nazwami zbiorników: str)
+2. dodanie zapisu w programie głównym -> baza danych
+
+----------------------
+
 [ ] przepisanie SENDERA - programu testowego tak aby wszystko było konfigurowalne z poziomu jednego pliku - configu
 
 [ ] dodanie zapisywania scenariuszy?
