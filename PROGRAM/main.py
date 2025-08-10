@@ -61,7 +61,7 @@ def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: 
                         # end
                         tank.set_event_end(measurement=measurement, event_type=event_type_int)
 
-                        database_manager.save_dosage(tank.events[event_type_int])
+                        database_manager.save_dosage(tank.events[event_type_int], tank.name)
 
                         if event_type_int == EventType.FILL.value:
                             tank.collision_points.clear()
@@ -75,7 +75,8 @@ def main():
         Tank(start_value=1000, 
                  pin_in=0, 
                  pin_out=1,
-                 port="/dev/pts/4")
+                 port="/dev/pts/4",
+                 name="Cement 1")
     ]
     CONFIG_SIGNAL_PORT = "/dev/pts/5"
         

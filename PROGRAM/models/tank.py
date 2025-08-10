@@ -6,11 +6,12 @@ from models.measurement import Measurement
 
 
 class Tank:
-    def __init__(self, start_value, pin_in, pin_out, port):
+    def __init__(self, start_value, pin_in, pin_out, port, name):
         self.value = start_value
         self.statuses = [0,0]
         self.pins = [pin_in, pin_out]
         self.port = port
+        self.name = name
 
         self.events: Tuple[DosageEvent, DosageEvent] = (DosageEvent(), DosageEvent())
         self.collision_points: List[Measurement] = []
@@ -36,16 +37,14 @@ class Tank:
     def set_event_end(self, event_type: EventType, measurement: Measurement):
         # store data
         self.events[event_type].measurement_end = copy.deepcopy(measurement)
-        self.events[event_type].calculate_value_difference()
+        self.events[event_type].calculate_parameters()  # value_difference, time_difference and dosing_speed_factor
         self.statuses[event_type] = 0
 
         # add collision_point
         if self.check_event_collision():
             self.collision_points.append(copy.deepcopy(measurement))
 
-        # calc value difference
-        # self.events[event_type].difference = self.events[event_type].measurement_end.value - self.events[event_type].measurement_start.value
-        self.events[event_type].calculate_value_difference()
+        # calc collision value difference
         self.calculate_collision_difference(event_type)
 
     # todo make two following methods priv
