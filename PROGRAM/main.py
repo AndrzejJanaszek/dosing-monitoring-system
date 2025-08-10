@@ -107,7 +107,6 @@ def main():
     # todo
 
     # run dosing thread
-    # todo
     dosing_monitoring_thread(
         serial_manager=serial_manager,
         database_manager=database_manager,
