@@ -11,6 +11,7 @@ import threading
 from header import *
 
 from event_config import tanks as imported_tanks
+from event_config import _SIMULATION_TIME_
         
 class TransmissionMode(Enum):
     LINE = "line"
@@ -25,7 +26,6 @@ def send_tank_value(tanks, mode: TransmissionMode = TransmissionMode.LINE, debug
         if debug_print:
             print(encoded_msg)
 
-
 def send_signals(port, tanks, mode: TransmissionMode = TransmissionMode.LINE, debug_print: bool = False):
     output = {}
 
@@ -39,7 +39,6 @@ def send_signals(port, tanks, mode: TransmissionMode = TransmissionMode.LINE, de
 
     if debug_print:
         print(encoded_msg)
-
 
 def encode_message(msg: str, mode: TransmissionMode = TransmissionMode.LINE) -> bytes:
     if mode == TransmissionMode.ASCII:
@@ -109,7 +108,7 @@ def simulation(signal_port):
         tanks = copy.deepcopy(imported_tanks)
 
         SIMULATION_TIME_STEP = 0.1
-        SIMULATION_TIME_END = 10 + SIMULATION_TIME_STEP
+        SIMULATION_TIME_END = _SIMULATION_TIME_ + SIMULATION_TIME_STEP
         EVENT_TYPES = [EventType.IN.value, EventType.OUT.value]
 
         # todo jeszcze jeden tryb \n\r czy jakos tak
@@ -146,6 +145,7 @@ def simulation(signal_port):
                         if sim_time > tank.get_current_event(e_type).s_time:
                             tank.set_active_status(e_type)
                             tank.value += tank.get_current_event(e_type).factor * SIMULATION_TIME_STEP
+                            print("SCENARIO:", tank.get_current_event(e_type).scenario_name)
                             # print(tank.value)
                         break
 
@@ -204,6 +204,8 @@ def main():
 
     save_connections(tank_ports, signal_port["slave_path"], SENDER_PATH_JSON)
     print_connections(tank_ports, signal_port["slave_path"])
+
+    print("_SIMULATION_TIME_:", _SIMULATION_TIME_, "[s] \n")
 
     ##################### SIMULATION ######################
 

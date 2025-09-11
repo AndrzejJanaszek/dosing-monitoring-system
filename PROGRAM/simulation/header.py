@@ -5,11 +5,12 @@ class EventType(Enum):
     OUT = 1
 
 class Event:
-    def __init__(self, start_time, end_time, factor, type:EventType):
+    def __init__(self, start_time, end_time, factor, type:EventType, scenario_name = "None"):
         self.s_time = start_time
         self.e_time = end_time
         self.factor = factor
         self.type = type
+        self.scenario_name: str
 
 class Tank:
     def __init__(self, start_value, pin_in, pin_out, port):

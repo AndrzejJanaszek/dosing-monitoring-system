@@ -1,27 +1,57 @@
 from header import *
 
-# assumptions
-# tank: 1
-# event: 1
+from scenario import Scenario, fundamental_scenerio_list
 
-event_list = [
-    [
-        Event(0,5,100,EventType.IN),
-        # Event(4,6,100,EventType.IN),
-        Event(2,3,-100,EventType.OUT),
-        Event(4,6,-100,EventType.OUT),
-    ],
-    # [
-    #     Event(0,2,1000,EventType.IN),
-    #     Event(4,6,-100,EventType.OUT),
-    #     Event(8,10,-100,EventType.OUT),
-    # ],
-    # [
-    #     Event(0,8,100,EventType.IN),
-    #     Event(2,4,-100,EventType.OUT),
-    #     Event(7,10,-100,EventType.OUT),
-    # ],
-]
+_TANK_STARTING_VALUE_ = 1000
+
+_SIMULATION_TIME_ = 10
+
+tanks = []
+
+def tank_per_scenerio():
+    global _SIMULATION_TIME_
+    _SIMULATION_TIME_ = max(sc.time_length for sc in fundamental_scenerio_list)
+    # for each scenerio
+    for i, sc in enumerate(fundamental_scenerio_list):
+        t = Tank(
+                start_value=_TANK_STARTING_VALUE_, 
+                pin_in=2*i, 
+                pin_out=2*i+1,
+                port=None)
+
+        # for each event
+        for ev in sc.event_list:
+            ev.scenario_name = sc.name
+            t.add_event(ev)
+
+        tanks.append(t)
+
+def one_tank_multiple_scenarios():
+    global _SIMULATION_TIME_
+    t = Tank(
+                start_value=_TANK_STARTING_VALUE_, 
+                pin_in=0, 
+                pin_out=1,
+                port=None)
+
+    time_offset = 0
+
+    # for each scenerio
+    for sc in fundamental_scenerio_list:
+        # for each event
+        for ev in sc.event_list:
+            ev.scenario_name = sc.name
+            ev.s_time += time_offset
+            ev.e_time += time_offset
+
+            t.add_event(ev)
+
+        time_offset += sc.time_length
+    
+    _SIMULATION_TIME_ = time_offset
+    tanks.append(t)
+    
+
 # todo
 # zrobić obiekty typu scenariusz i zapisać poniższe scenariusze
 # odpalić zbiornik dla każdego scenariusza jako test
@@ -36,81 +66,6 @@ event_list = [
 #
 # do tego musi być zapis ścieżek do pliku i w programie głównym moduł
 # odczytujący je (ten config) bo bez sensu byłoby ręczne wklepywanie tego
-event_list_standarised = [
-    [
-        Event(0,2,100,EventType.IN),    # in
 
-        Event(0,2,100,EventType.OUT),   # out
-
-        Event(2,6,100,EventType.IN),    #  |--in--|
-        Event(0,4,100,EventType.OUT),   # out
-
-        Event(0,4,100,EventType.IN),    # |--in--|
-        Event(2,6,100,EventType.OUT),   #       out
-
-        Event(0,6,100,EventType.IN),    # |--in--|
-        Event(2,4,100,EventType.OUT),   #    out
-
-        # -----------------------------
-        Event(2,10,100,EventType.IN),   #  |--in----|
-        Event(0,4,100,EventType.OUT),   # out   out
-        Event(6,8,100,EventType.OUT),
-
-        Event(0,8,100,EventType.IN),    # |--in----|
-        Event(2,4,100,EventType.OUT),   #   out   out
-        Event(6,10,100,EventType.OUT),
-
-        Event(2,8,100,EventType.IN),    #  |--in--|
-        Event(0,4,100,EventType.OUT),   # out    out
-        Event(6,10,100,EventType.OUT),
-
-        Event(2,10,100,EventType.IN),   #  |---in----|
-        Event(0,4,100,EventType.OUT),   # out  out  out
-        Event(6,8,100,EventType.OUT),
-        Event(10,12,100,EventType.OUT),
-
-        #----------------------------------------
-        Event(0,10,100,EventType.IN),   # |----in----|
-        Event(2,4,100,EventType.OUT),   #   out out 
-        Event(6,8,100,EventType.OUT),
-
-        Event(2,14,100,EventType.IN),   #  |----in-----|
-        Event(0,4,100,EventType.OUT),   # out  out out 
-        Event(6,8,100,EventType.OUT),
-        Event(10,12,100,EventType.OUT),
-
-        Event(0,12,100,EventType.IN),   # |----in-----|
-        Event(2,4,100,EventType.OUT),   #  out out   out 
-        Event(6,8,100,EventType.OUT),
-        Event(10,14,100,EventType.OUT),
-
-        Event(2,16,100,EventType.IN),   #  |----in-------|
-        Event(0,4,100,EventType.OUT),   # out  out out  out 
-        Event(6,8,100,EventType.OUT),
-        Event(10,12,100,EventType.OUT),
-        Event(14,18,100,EventType.OUT),
-
-
-    ],
-    # [
-    #     Event(0,2,1000,EventType.IN),
-    #     Event(4,6,-100,EventType.OUT),
-    #     Event(8,10,-100,EventType.OUT),
-    # ],
-    # [
-    #     Event(0,8,100,EventType.IN),
-    #     Event(2,4,-100,EventType.OUT),
-    #     Event(7,10,-100,EventType.OUT),
-    # ],
-]
-
-tanks = [
-    Tank(1000, 0, 1, None),
-    # Tank(1000, 2, 3, None),
-    # Tank(1000, 4, 5, None),
-]
-
-
-for i in range(0, len(tanks)):
-    for e in event_list[i]:
-        tanks[i].add_event(e)
+# tank_per_scenerio()
+one_tank_multiple_scenarios()
