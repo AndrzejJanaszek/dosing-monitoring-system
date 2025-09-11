@@ -10,7 +10,7 @@ class Scenario:
     def calc_time_length(self):
         return max((e.e_time for e in self.event_list), default=0)
 
-fundamental_scenerio_list = [
+gr_1_scenarios = [
     Scenario(
         "IN", 
         [Event(0,2,100,EventType.IN)]
@@ -41,9 +41,9 @@ fundamental_scenerio_list = [
             Event(0,6,100,EventType.IN),    # |--in--|
             Event(2,4,-100,EventType.OUT),   #    out
         ])
+]
 
-    # ------------------------
-    ,
+gr_2_scenarios = [
     Scenario(
         "FRONT-INNER",
         [
@@ -76,9 +76,9 @@ fundamental_scenerio_list = [
             Event(6,8,-100,EventType.OUT),
             Event(10,12,-100,EventType.OUT),
         ])
+]
 
-    # ------------------------------------
-    ,
+gr_3_scenarios = [
     Scenario(
         "M_INNER",
         [
@@ -114,5 +114,6 @@ fundamental_scenerio_list = [
             Event(10,12,-100,EventType.OUT),
             Event(14,18,-100,EventType.OUT),
         ])
-        ,
 ]
+
+fundamental_scenerio_list = gr_1_scenarios + gr_2_scenarios + gr_3_scenarios
