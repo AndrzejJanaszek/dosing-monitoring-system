@@ -61,7 +61,7 @@ def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: 
                         # end
                         tank.set_event_end(measurement=measurement, event_type=event_type_int)
 
-                        database_manager.save_dosage(tank.events[event_type_int], tank.name)
+                        database_manager.save_dosage(tank.events[event_type_int], tank.name, event_type_int)
 
                         if event_type_int == EventType.FILL.value:
                             tank.collision_points.clear()
@@ -71,14 +71,41 @@ def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: 
 def main():
     # load config
     # mock
-    tanks = [
-        Tank(start_value=1000, 
-                 pin_in=0, 
-                 pin_out=1,
-                 port="/dev/pts/4",
-                 name="Cement 1")
-    ]
-    CONFIG_SIGNAL_PORT = "/dev/pts/5"
+
+   
+    tanks = []
+
+    # Ścieżka do pliku JSON
+    DEV_JSON_PORTS_PATH = './simulation/sender-path.json'
+
+    # Wczytanie pliku JSON
+    with open(DEV_JSON_PORTS_PATH, 'r') as f:
+        simulation_json = json.load(f)
+
+    # Tworzenie obiektów Tank
+    for i, tank_port in enumerate(simulation_json["tank_ports"]):
+        t = Tank(
+            start_value=1000,
+            pin_in=2*i,
+            pin_out=2*i+1,
+            port=tank_port["slave_path"],
+            name=f'Zbiornik nr: {i}'
+        )
+        tanks.append(t)
+
+    # Konfiguracja portu sygnału
+    CONFIG_SIGNAL_PORT = simulation_json["signal_port"]["slave_path"]
+    
+
+    # asign port from json to CONFIG_SIGNAL_PORT 
+    # tanks = [
+    #     Tank(start_value=1000, 
+    #              pin_in=0, 
+    #              pin_out=1,
+    #              port="/dev/pts/4",
+    #              name="Cement 1")
+    # ]
+    # CONFIG_SIGNAL_PORT = "/dev/pts/5"
         
 
     # init serial_manager

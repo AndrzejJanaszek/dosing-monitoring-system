@@ -63,7 +63,7 @@ def n_tanks_n_scenerios(tank_number: int, scenerio_list: List[Scenario], shuffle
         time_offset += sc.time_length + _SEPARATION_TIME_
     _SIMULATION_TIME_ = time_offset
 
-    for n in range(0,tank_number+1):
+    for n in range(0,tank_number):
         t = Tank(
                     start_value=_TANK_STARTING_VALUE_, 
                     pin_in=2*n, 
@@ -90,28 +90,13 @@ def n_tanks_n_scenerios(tank_number: int, scenerio_list: List[Scenario], shuffle
         
         tanks.append(t)
 
-# todo
-# zrobić obiekty typu scenariusz i zapisać poniższe scenariusze
-# odpalić zbiornik dla każdego scenariusza jako test
-# a wczesniej przygotowac srodowskio testowe do tego
-# 1. wszsytkie scenariusze - odpala dla każdego osobny zbiornik
-# 2. losowe scenariusze - losuje N scenariuszy; opcja osobne zbiorniki: bool 
-# (jeżeli True odpala na osobnych zbiornikach, jeżeli False
-# odpala na jednym)
-# 3. wybrany schemat testowania:
-# konfigurujemy ile zbiorników i z jakimi scenariuszami
-# do tego możliwość zrobienia customowego scenariusza
-#
-# do tego musi być zapis ścieżek do pliku i w programie głównym moduł
-# odczytujący je (ten config) bo bez sensu byłoby ręczne wklepywanie tego
-
 # tank_per_scenerio()
 # one_tank_multiple_scenarios()
 
 
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=fundamental_scenerio_list, shuffle=False)
 
-n_tanks_n_scenerios(tank_number=5, scenerio_list=gr_1_scenarios, shuffle=True)
+n_tanks_n_scenerios(tank_number=1, scenerio_list=gr_1_scenarios, shuffle=False)
 
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=gr_2_scenarios, shuffle=False)
 

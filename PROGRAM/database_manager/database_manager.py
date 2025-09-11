@@ -43,12 +43,13 @@ class __DatabaseManager:
         print(f"[MOCK] Zapis pomiaru: {data}")
         print()
 
-    def save_dosage(self, data: DosageEvent, tank_name: str):
+    def save_dosage(self, data: DosageEvent, tank_name: str, event_type):
         """
         Zapis pojedynczego dozowania (mock).
         :param data: DosageEvent
         """
         print("\ntank_name: ", tank_name)
+        print("\nevent_type: ", event_type)
         data.print_state()
         print()
 
