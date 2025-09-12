@@ -35,7 +35,7 @@ MAIN POINTS:
 
 [ ] Możliwość print logowania stanu programu (serial connections, db connection, stan zbiorników itd.)
 
-[ ] zastanowienie się nad symulacją - senderem i sposobem automatyzacji konfiguracji portów
+[X] zastanowienie się nad symulacją - senderem i sposobem automatyzacji konfiguracji portów
 Czyli sender zapisuje jakie porty otwiera a program główny je przyjmuje
 
 [ ] zrobienie dokumentacji

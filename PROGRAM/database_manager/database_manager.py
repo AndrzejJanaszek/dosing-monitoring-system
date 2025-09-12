@@ -34,6 +34,8 @@ class __DatabaseManager:
             print(f"Błąd połączenia z MySQL: {e}")
             self.connection = None
 
+    # todo tank_name zmienic na id i w configu to wpisywać
+    # bo w bazie jest dodana relacja tank<->even; tank<->measurement
     def save_measurement(self, data: Measurement, tank_name: str):
         """
         Zapis pojedynczego pomiaru (mock).
