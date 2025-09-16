@@ -6,12 +6,12 @@ from models.measurement import Measurement
 
 
 class Tank:
-    def __init__(self, start_value, pin_in, pin_out, port, name):
-        self.value = start_value
+    def __init__(self, pin_in, pin_out, port, name, id):
         self.statuses = [0,0]
         self.pins = [pin_in, pin_out]
         self.port = port
         self.name = name
+        self.id = id
 
         self.events: Tuple[DosageEvent, DosageEvent] = (DosageEvent(), DosageEvent())
         self.collision_points: List[Measurement] = []

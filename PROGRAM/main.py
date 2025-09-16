@@ -61,7 +61,7 @@ def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: 
                         # end
                         tank.set_event_end(measurement=measurement, event_type=event_type_int)
 
-                        database_manager.save_dosage(tank.events[event_type_int], tank.name, event_type_int)
+                        database_manager.save_dosage(tank.events[event_type_int], tank.id, event_type_int)
 
                         if event_type_int == EventType.FILL.value:
                             tank.collision_points.clear()
@@ -85,11 +85,11 @@ def main():
     # Tworzenie obiektów Tank
     for i, tank_port in enumerate(simulation_json["tank_ports"]):
         t = Tank(
-            start_value=1000,
             pin_in=2*i,
             pin_out=2*i+1,
             port=tank_port["slave_path"],
-            name=f'Zbiornik nr: {i}'
+            name=f'Zbiornik nr: {i}',
+            id = (i+1)
         )
         tanks.append(t)
 
@@ -126,10 +126,10 @@ def main():
 
     # init databaseManager
     database_manager.setup_configuration(
-        host="",
-        user="",
-        password="",
-        database=""
+        host="localhost",
+        user="dev",
+        password="zaq1@WSX",
+        database="akces-dms"
     )
     # run cycle thread
     # todo
