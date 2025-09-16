@@ -11,6 +11,8 @@ from models.tank import Tank
 from models.transmition import TransmitionFormat
 from serial_manager.serial_manager import serial_manager, __SerialManager
 
+import threading
+
 
 def parse_signal_json(signal_json: str) -> dict[int, int]:
     try:
@@ -34,7 +36,7 @@ def parse_tank_data(tank_data: str) -> float:
 # tank list
 # serialManager -> event
 # databaseManager -> for handling function\
-def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: __DatabaseManager, tanks: List[Tank]):
+def dosing_monitoring_thread_fn(serial_manager: __SerialManager, database_manager: __DatabaseManager, tanks: List[Tank]):
     while True:    
         # read signal data
         serial_manager.signal_data_event.wait()
@@ -68,7 +70,18 @@ def dosing_monitoring_thread(serial_manager: __SerialManager, database_manager: 
 
                         tank.events[event_type_int].clear()
 
+def cycle_thread_fn(serial_manager: __SerialManager, database_manager: __DatabaseManager, tanks: List[Tank], stop_event: threading.Event, cycle_save_delay: int):
+    while not stop_event.is_set():
+        for tank in tanks:
+            data = serial_manager.get_tank_data(tank.port)
+            tank_value = parse_tank_data(data)
+            measurement = Measurement(tank_value)
 
+            database_manager.save_measurement(measurement, tank.id)
+            
+            stop_event.wait(cycle_save_delay)
+
+    
 def main():
     # load config
     CONFIG_PATH = "./config/config.json"
@@ -166,14 +179,26 @@ def main():
 
     
     # run cycle thread
-    # todo
+    stop_cycle_event = threading.Event()
+    cycle_thread = threading.Thread(target=cycle_thread_fn, kwargs={
+        "serial_manager": serial_manager,
+        "database_manager": database_manager,
+        "tanks": tanks,
+        "stop_event": stop_cycle_event,
+        "cycle_save_delay": config["CYCLE_SAVE_DELAY"]
+    },
+    name="CycleSaverThread"
+    )
+
+    cycle_thread.start()
 
     # run dosing thread
-    dosing_monitoring_thread(
-        serial_manager=serial_manager,
-        database_manager=database_manager,
-        tanks=tanks
-    )
+    dosing_thread = threading.Thread(target=dosing_monitoring_thread_fn, kwargs={
+        "serial_manager":serial_manager,
+        "database_manager": database_manager,
+        "tanks": tanks
+    })
+    dosing_thread.start()
 
 
 if __name__ == "__main__":

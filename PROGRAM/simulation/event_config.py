@@ -5,7 +5,9 @@ from header import *
 
 from scenario import Scenario, fundamental_scenerio_list, gr_1_scenarios, gr_2_scenarios, gr_3_scenarios
 
-_TANK_STARTING_VALUE_ = 1000
+from testing_scenerios import s1
+
+_TANK_STARTING_VALUE_ = 30000
 
 _SIMULATION_TIME_ = 10
 
@@ -102,7 +104,7 @@ def n_tanks_n_scenerios(tank_number: int, scenerio_list: List[Scenario], shuffle
 
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=fundamental_scenerio_list, shuffle=False)
 
-n_tanks_n_scenerios(tank_number=1, scenerio_list=gr_1_scenarios, shuffle=False)
+# n_tanks_n_scenerios(tank_number=1, scenerio_list=gr_1_scenarios, shuffle=False)
 
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=gr_2_scenarios, shuffle=False)
 
@@ -111,3 +113,7 @@ n_tanks_n_scenerios(tank_number=1, scenerio_list=gr_1_scenarios, shuffle=False)
 # tank_per_scenerio()
 
 # one_tank_multiple_scenarios()
+
+# -------------------------------------------------
+
+n_tanks_n_scenerios(tank_number=1, scenerio_list=[s1], shuffle=False)

@@ -8,6 +8,7 @@
   
   "DEV_JSON_PORTS_PATH": "./simulation/sender-path.json",
   "SIGNAL_PORT_PATH": "/dev/pts/5",
+  "CYCLE_SAVE_DELAY": 5,
 
   "tanks": [
     {

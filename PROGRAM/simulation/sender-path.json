@@ -3,57 +3,9 @@
     {
       "id": 0,
       "slave_path": "/dev/pts/4"
-    },
-    {
-      "id": 1,
-      "slave_path": "/dev/pts/5"
-    },
-    {
-      "id": 2,
-      "slave_path": "/dev/pts/6"
-    },
-    {
-      "id": 3,
-      "slave_path": "/dev/pts/7"
-    },
-    {
-      "id": 4,
-      "slave_path": "/dev/pts/8"
-    },
-    {
-      "id": 5,
-      "slave_path": "/dev/pts/9"
-    },
-    {
-      "id": 6,
-      "slave_path": "/dev/pts/10"
-    },
-    {
-      "id": 7,
-      "slave_path": "/dev/pts/11"
-    },
-    {
-      "id": 8,
-      "slave_path": "/dev/pts/12"
-    },
-    {
-      "id": 9,
-      "slave_path": "/dev/pts/13"
-    },
-    {
-      "id": 10,
-      "slave_path": "/dev/pts/14"
-    },
-    {
-      "id": 11,
-      "slave_path": "/dev/pts/15"
-    },
-    {
-      "id": 12,
-      "slave_path": "/dev/pts/16"
     }
   ],
   "signal_port": {
-    "slave_path": "/dev/pts/17"
+    "slave_path": "/dev/pts/5"
   }
 }

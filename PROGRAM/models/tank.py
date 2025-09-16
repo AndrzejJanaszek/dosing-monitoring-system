@@ -16,7 +16,7 @@ class Tank:
         self.events: Tuple[DosageEvent, DosageEvent] = (DosageEvent(), DosageEvent())
         self.collision_points: List[Measurement] = []
         
-        self.dispense_speed_factor: float = -100.0
+        self.dispense_speed_factor: float = -1000.0
     
     def set_event_start(self, event_type: EventType, measurement: Measurement):
         # store data
@@ -60,8 +60,13 @@ class Tank:
                 collisionTime += (self.collision_points[i+1].time - self.collision_points[i].time).total_seconds()
 
             dispense_value = collisionTime * self.dispense_speed_factor
+            print("collisionTime", collisionTime)
+            print("self.dispense_speed_factor", self.dispense_speed_factor)
+            print("dispense_value", dispense_value)
             value_diff = self.events[EventType.FILL.value].measurement_end.value - self.events[EventType.FILL.value].measurement_start.value
+            print("value_diff", value_diff)
             calc_change = (-dispense_value) + value_diff    # *-1 becouse dispensed value is negative
+            print("calc_change", calc_change)
 
             self.events[EventType.FILL.value].collision_difference = calc_change
         else:
