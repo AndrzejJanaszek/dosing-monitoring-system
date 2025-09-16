@@ -90,8 +90,14 @@ def n_tanks_n_scenerios(tank_number: int, scenerio_list: List[Scenario], shuffle
         
         tanks.append(t)
 
-# tank_per_scenerio()
-# one_tank_multiple_scenarios()
+
+
+
+
+# print("len(gr_1_scenarios): ", len(gr_1_scenarios))
+# print("len(gr_2_scenarios): ", len(gr_2_scenarios))
+# print("len(gr_3_scenarios): ", len(gr_3_scenarios))
+# print("len(fundamental_scenerio_list): ", len(fundamental_scenerio_list))
 
 
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=fundamental_scenerio_list, shuffle=False)
@@ -101,3 +107,7 @@ n_tanks_n_scenerios(tank_number=1, scenerio_list=gr_1_scenarios, shuffle=False)
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=gr_2_scenarios, shuffle=False)
 
 # n_tanks_n_scenerios(tank_number=5, scenerio_list=gr_3_scenarios, shuffle=False)
+
+# tank_per_scenerio()
+
+# one_tank_multiple_scenarios()

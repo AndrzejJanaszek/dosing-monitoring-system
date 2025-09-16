@@ -38,8 +38,6 @@ class __SerialManager:
         self.tank_serial_paths = tank_serial_paths
         self.signal_serial_path = signal_serial_path
 
-        
-
     def setup_connections(self):
         for path in self.tank_serial_paths:
             conn = SerialPortWrapper(path, timeout=self.SERIAL_TIMEOUT)

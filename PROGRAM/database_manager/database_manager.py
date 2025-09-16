@@ -43,9 +43,9 @@ class __DatabaseManager:
         """
         values = (data.value, data.time, tank_id)
 
-        with self.conn.cursor() as cursor:
+        with self.connection.cursor() as cursor:
             cursor.execute(query, values)
-        self.conn.commit()
+        self.connection.commit()
 
         # 
         # debug / mock
@@ -79,19 +79,38 @@ class __DatabaseManager:
             event_type_name
         )
 
-        with self.conn.cursor() as cursor:
+        with self.connection.cursor() as cursor:
             cursor.execute(query, values)
-        self.conn.commit()
+        self.connection.commit()
 
         """
         Zapis pojedynczego dozowania (mock).
         :param data: DosageEvent
         """
         print("\ntank_id: ", tank_id)
-        print("\event_type_int: ", event_type_int)
-        print("\event_type_name: ", event_type_name)
+        print("\nevent_type_int: ", event_type_int)
+        print("\nevent_type_name: ", event_type_name)
         data.print_state()
         print()
+    
+    def save_tanks(self, tanks):
+        query = """
+            INSERT INTO `akces-dms`.`tanks` (id, tank_name)
+            VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE tank_name = VALUES(tank_name)
+        """
+        values = [(tank["id"], tank["name"]) for tank in tanks]
+
+        with self.connection.cursor() as cursor:
+            cursor.executemany(query, values)
+        self.connection.commit()
+
+    def get_tanks(self):
+        query = "SELECT id, tank_name FROM `akces-dms`.`tanks`"
+        with self.connection.cursor(dictionary=True) as cursor:
+            cursor.execute(query)
+            return cursor.fetchall()
+
 
     def close(self):
         """Zamknięcie połączenia z bazą."""

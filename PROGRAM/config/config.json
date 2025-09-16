@@ -1,0 +1,105 @@
+{
+  "db": {
+    "host":"localhost",
+    "user":"dev",
+    "password":"zaq1@WSX",
+    "database":"akces-dms"
+  },
+  
+  "DEV_JSON_PORTS_PATH": "./simulation/sender-path.json",
+  "SIGNAL_PORT_PATH": "/dev/pts/5",
+
+  "tanks": [
+    {
+      "id": 1,
+      "name": "Cement 1",
+      "port": "None",
+      "pin_in": 1,
+      "pin_out": 2
+    },
+    {
+      "id": 2,
+      "name": "Cement 2",
+      "port": "None",
+      "pin_in": 3,
+      "pin_out": 4
+    },
+    {
+      "id": 3,
+      "name": "Cement 3",
+      "port": "None",
+      "pin_in": 5,
+      "pin_out": 6
+    },
+    {
+      "id": 4,
+      "name": "Piasek 1",
+      "port": "None",
+      "pin_in": 7,
+      "pin_out": 8
+    },
+    {
+      "id": 5,
+      "name": "Piasek 2",
+      "port": "None",
+      "pin_in": 9,
+      "pin_out": 10
+    },
+    {
+      "id": 6,
+      "name": "Piasek 3",
+      "port": "None",
+      "pin_in": 11,
+      "pin_out": 12
+    },
+    {
+      "id": 7,
+      "name": "Woda 1",
+      "port": "None",
+      "pin_in": 13,
+      "pin_out": 14
+    },
+    {
+      "id": 8,
+      "name": "Woda 2",
+      "port": "None",
+      "pin_in": 15,
+      "pin_out": 16
+    },
+    {
+      "id": 9,
+      "name": "Woda 3",
+      "port": "None",
+      "pin_in": 17,
+      "pin_out": 18
+    },
+    {
+      "id": 10,
+      "name": "Zwir 1",
+      "port": "None",
+      "pin_in": 19,
+      "pin_out": 20
+    },
+    {
+      "id": 11,
+      "name": "Zwir 2",
+      "port": "None",
+      "pin_in": 21,
+      "pin_out": 22
+    },
+    {
+      "id": 12,
+      "name": "Zwir 3",
+      "port": "None",
+      "pin_in": 23,
+      "pin_out": 24
+    },
+    {
+      "id": 13,
+      "name": "Omega",
+      "port": "None",
+      "pin_in": 25,
+      "pin_out": 26
+    }
+  ]
+}
