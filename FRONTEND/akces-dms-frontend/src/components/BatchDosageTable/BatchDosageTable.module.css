@@ -1,0 +1,15 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 8px;
+  border: 1px solid #ccc;
+  text-align: center;
+}
+
+.collisionRow {
+  background-color: rgba(206, 136, 136, 0.153); /* lekko czerwone tło */
+}
