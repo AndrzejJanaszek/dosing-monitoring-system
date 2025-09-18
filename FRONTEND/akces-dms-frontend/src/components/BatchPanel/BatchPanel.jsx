@@ -1,5 +1,6 @@
-import React from 'react'
-import BatchDosageTable from '../BatchDosageTable/BatchDosageTable'
+import React from "react";
+import BatchDosageTable from "../BatchDosageTable/BatchDosageTable";
+import styles from "./BatchPanel.module.css";
 
 export default function BatchPanel() {
   const json = `
@@ -73,38 +74,52 @@ export default function BatchPanel() {
   }
 }
 
-  `
+  `;
 
-  const { batch } = JSON.parse(json)
-  const status = batch.isActive
-  const timestampStart = new Date(batch.timestampStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  const timestampEnd = batch.timestampEnd 
-    ? new Date(batch.timestampEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '--:--'
-  const dosages = batch.dosages
-  const valueSum = dosages.reduce((sum, d) => sum + d.valueDifference, 0)
-  const collisionValueSum = dosages.reduce((sum, d) => sum + d.collisionValueDifference, 0)
+  const { batch } = JSON.parse(json);
+  const status = batch.isActive;
+  const timestampStart = new Date(batch.timestampStart).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const timestampEnd = batch.timestampEnd
+    ? new Date(batch.timestampEnd).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "--:--";
+  const dosages = batch.dosages;
+  const valueSum = dosages.reduce((sum, d) => sum + d.valueDifference, 0);
+  const collisionValueSum = dosages.reduce(
+    (sum, d) => sum + d.collisionValueDifference,
+    0
+  );
 
   return (
-    <div>
-      <header>
-        <h1>OSTATNIA GRUSZKA</h1>
-        <div 
-          className="statusIcon" 
-          style={{ color: status ? 'green' : 'red' }}
-        >
-          O
-        </div>
+    <div className={styles.batchPanel}>
+      <header className={styles.header}>
+        <h1 className={styles.headerTitle}>GRUSZKA</h1>
+        <div
+          className={`${styles.statusIcon} ${
+            status ? styles.statusIconGreen : styles.statusIconRed
+          }`}
+        ></div>
       </header>
-      <div className="time">
-        <div className="timeStart">{timestampStart}</div>
-        <div className="timeEnd">{timestampEnd}</div>
+      <div className={styles.timeContainer}>
+        <div className={styles.timeStart}>{timestampStart}</div>
+        <div className={styles.timeEnd}>{timestampEnd}</div>
       </div>
       <BatchDosageTable dosages={dosages}></BatchDosageTable>
-      <div className="summary">
-        <div className="valueSum">{valueSum}</div>
-        <div className="collisionValueSum">{collisionValueSum}</div>
+      <div className={styles.summary}>
+        <div className={styles.valueSum}>
+          <span>Suma:</span>
+          <span>{valueSum}</span>
+        </div>
+        <div className={styles.valueSum}>
+          <span>Suma kolizyjna:</span>
+          <span>{collisionValueSum}</span>
+        </div>
       </div>
     </div>
-  )
+  );
 }

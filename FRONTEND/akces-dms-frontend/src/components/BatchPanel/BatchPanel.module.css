@@ -1,0 +1,83 @@
+.batchPanel{
+    border: 1px solid white;
+    
+    padding: 1rem;
+}
+
+.header{
+    border: 1px solid white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 0 1rem;
+}
+
+.headerTitle{
+
+}
+
+.statusIcon{
+    --icon-bgc: #fff;
+
+    display: grid;
+    place-items: center;
+
+    width: 2rem;
+    height: 2rem;
+
+    border-radius: 2rem;
+    background-color: var(--icon-bgc);
+    box-shadow: 0rem 0rem 0.7rem var(--icon-bgc);
+}
+
+.statusIconGreen{
+    --icon-bgc: green;
+}
+
+.statusIconRed{
+    --icon-bgc: red;
+}
+
+/* ------------ */
+
+.timeContainer{
+    border: 1px solid white;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    
+    padding: 1rem;
+
+    font-size: 1.4rem;
+}
+
+.timeStart{
+    position: relative;
+    display: grid;
+    place-items: center;
+
+    /* padding: 1rem; */
+}
+
+.timeEnd{
+    position: relative;
+    display: grid;
+    place-items: center;
+
+    /* padding: 1rem; */
+}
+
+
+/* ------------ */
+
+.summary{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+
+.valueSum{
+    border: 1px solid white;
+    display: flex;
+    justify-content: space-between;
+    padding: 1rem;
+}
