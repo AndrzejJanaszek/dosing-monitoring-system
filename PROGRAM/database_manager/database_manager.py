@@ -111,6 +111,14 @@ class __DatabaseManager:
             cursor.execute(query)
             return cursor.fetchall()
 
+    def get_measurements(self):
+        pass
+
+    def get_dosages(self):
+        pass
+
+    def get_batches(self):
+        pass
 
     def close(self):
         """Zamknięcie połączenia z bazą."""
