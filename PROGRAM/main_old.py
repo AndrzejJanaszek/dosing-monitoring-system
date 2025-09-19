@@ -1,40 +1,61 @@
 import json
-import threading
-from database_manager.database_manager import database_manager
-from serial_manager.serial_manager import serial_manager
+
 from models.tank import Tank
 from models.transmition import TransmitionFormat
-# from threads.threads import cycle_thread_fn
+
+from serial_manager.serial_manager import serial_manager, __SerialManager
+from database_manager.database_manager import database_manager, __DatabaseManager
+
+import threading
+
 from threads.threads import cycle_thread_fn, dosing_monitoring_thread_fn
 
-def create_core():
+
+def main():
     # load config
-    with open("./config/config.json", "r") as f:
+    CONFIG_PATH = "./config/config.json"
+    with open(CONFIG_PATH, 'r') as f:
         config = json.load(f)
 
 
-    # DB setup
+    # init databaseManager
     database_manager.setup_configuration(
         host=config["db"]["host"],
         user=config["db"]["user"],
         password=config["db"]["password"],
         database=config["db"]["database"],
     )
+
     database_manager.connect()
+    
 
-
-    # Tanks
+    # tank list; config db relation check
     db_tanks = database_manager.get_tanks()
+
     existing_tanks = {(t["id"], t["tank_name"]) for t in db_tanks}
+
     tank_add_list = [
         {"id": t["id"], "name": t["name"]}
         for t in config["tanks"]
         if (t["id"], t["name"]) not in existing_tanks
     ]
+
     if tank_add_list:
         database_manager.save_tanks(tank_add_list)
 
-    tanks = [Tank(**t) for t in config["tanks"]]
+
+    # load tanks from config 
+    tanks = []
+    for t in config["tanks"]:
+        tanks.append(
+            Tank(
+            pin_in = t["pin_in"],
+            pin_out = t["pin_out"],
+            port = t["port"],
+            name = t["name"],
+            id = t["id"]
+            )
+        )
 
 
     # <START> DEV -- DEV -- DEV -- DEV -- DEV -- DEV -- DEV
@@ -61,7 +82,7 @@ def create_core():
     # <END> DEV -- DEV -- DEV -- DEV -- DEV -- DEV -- DEV
 
 
-    # Serial manager
+    # init serial_manager
     serial_manager.setup_configuration(
         tank_serial_paths=[t.port for t in tanks],
         signal_serial_path=CONFIG_SIGNAL_PORT,
@@ -71,9 +92,11 @@ def create_core():
         tank_transmition_format=TransmitionFormat.ASCII,
         signal_transmition_format=TransmitionFormat.ASCII
     )
+
+    # todo: zastanowic sie nad logika tego
+    # czy jest sens wywolywac kilka funkcji
     serial_manager.setup_connections()
     serial_manager.start_threads()
-
 
     print("\nSerial Manager:")
     print("Połączenia:")
@@ -81,33 +104,28 @@ def create_core():
     print("- Signal:", True if serial_manager.signal_serial_connection else False)
     print()
 
-
-    # Threads
-    cycle_thread = threading.Thread(
-        target=cycle_thread_fn,
-        kwargs=dict(
-            serial_manager=serial_manager,
-            database_manager=database_manager,
-            tanks=tanks,
-            cycle_save_delay=config["CYCLE_SAVE_DELAY"],
-        ),
-        name="CycleSaverThread"
+    
+    # run cycle thread
+    cycle_thread = threading.Thread(target=cycle_thread_fn, kwargs={
+        "serial_manager": serial_manager,
+        "database_manager": database_manager,
+        "tanks": tanks,
+        "cycle_save_delay": config["CYCLE_SAVE_DELAY"]
+    },
+    name="CycleSaverThread"
     )
+
     cycle_thread.start()
 
-    dosing_thread = threading.Thread(
-        target=dosing_monitoring_thread_fn,
-        kwargs=dict(
-            serial_manager=serial_manager,
-            database_manager=database_manager,
-            tanks=tanks,
-        ),
-        name="DosingMonitoringThread"
-    )
+    # run dosing thread
+    dosing_thread = threading.Thread(target=dosing_monitoring_thread_fn, kwargs={
+        "serial_manager":serial_manager,
+        "database_manager": database_manager,
+        "tanks": tanks
+    })
     dosing_thread.start()
 
-    return {
-        "db": database_manager,
-        "serial": serial_manager,
-        "tanks": tanks
-    }
+
+if __name__ == "__main__":
+    
+    main()

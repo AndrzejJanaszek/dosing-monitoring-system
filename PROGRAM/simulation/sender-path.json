@@ -2,10 +2,10 @@
   "tank_ports": [
     {
       "id": 0,
-      "slave_path": "/dev/pts/4"
+      "slave_path": "/dev/pts/8"
     }
   ],
   "signal_port": {
-    "slave_path": "/dev/pts/5"
+    "slave_path": "/dev/pts/9"
   }
 }

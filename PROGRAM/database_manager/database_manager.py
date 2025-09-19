@@ -1,3 +1,5 @@
+import threading
+from typing import Optional
 import mysql.connector
 from mysql.connector import Error
 
@@ -11,6 +13,10 @@ class __DatabaseManager:
         self.password = None
         self.database = None
         self.connection = None
+
+        self.batch_update_event = threading.Event() # todo VVV
+        # ma się zmianiać (ustawiać) po dodaniu gruszki
+        # lub dozowania do gruszki
 
     def setup_configuration(self, host="", user="", password="", database=""):
         self.host = host
@@ -111,14 +117,259 @@ class __DatabaseManager:
             cursor.execute(query)
             return cursor.fetchall()
 
-    def get_measurements(self):
-        pass
+    def get_measurements(
+            self, 
+            tank_id: Optional[int] = None, 
+            from_date: Optional[str] = None, 
+            to_date: Optional[str] = None):
+        """
+        Pobiera pomiary z tabeli measurements z opcjonalnymi filtrami:
+        - tank_id: int
+        - from_date: str w formacie 'YYYY-MM-DD' lub 'YYYY-MM-DD HH:MM:SS'
+        - to_date: str w formacie 'YYYY-MM-DD' lub 'YYYY-MM-DD HH:MM:SS'
+        Zwraca listę słowników: [{"id":..., "value":..., "timestamp":..., "tank_id":...}, ...]
+        """
+        query = """
+                SELECT m.id, m.value, m.timestamp, m.tank_id, t.tank_name
+                FROM `akces-dms`.`measurements` AS m
+                JOIN `akces-dms`.`tanks` AS t ON m.tank_id = t.id
+                WHERE 1=1
+            """
+        params = []
 
-    def get_dosages(self):
-        pass
+        if tank_id is not None:
+            query += " AND tank_id = %s"
+            params.append(tank_id)
 
-    def get_batches(self):
-        pass
+        if from_date is not None:
+            query += " AND timestamp >= %s"
+            params.append(from_date)
+
+        if to_date is not None:
+            query += " AND timestamp <= %s"
+            params.append(to_date)
+
+        cursor = self.connection.cursor(dictionary=True)
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        cursor.close()
+
+        return results
+
+    def get_dosages(
+        self,
+        tank_id: Optional[int] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        is_collision: Optional[bool] = None
+    ):
+        """
+        Pobiera dane z tabeli dosing_events z opcjonalnymi filtrami:
+        - tank_id: int
+        - from_date: str w formacie 'YYYY-MM-DD' lub 'YYYY-MM-DD HH:MM:SS'
+        - to_date: str w formacie 'YYYY-MM-DD' lub 'YYYY-MM-DD HH:MM:SS'
+        - is_collision: bool
+        Zwraca listę słowników z wszystkimi kolumnami z dosing_events.
+        """
+        query = """
+            SELECT d.id,
+                d.value_start,
+                d.value_end,
+                d.timestamp_start,
+                d.timestamp_end,
+                d.is_collision,
+                d.value_difference,
+                d.collision_value_difference,
+                d.time_difference,
+                d.dosing_speed_factor,
+                d.tank_id,
+                d.type,
+                t.tank_name
+            FROM `akces-dms`.`dosing_events` AS d
+            JOIN `akces-dms`.`tanks` AS t ON d.tank_id = t.id
+            WHERE 1=1
+        """
+        params = []
+
+        if tank_id is not None:
+            query += " AND d.tank_id = %s"
+            params.append(tank_id)
+
+        if from_date is not None:
+            query += " AND d.timestamp_start >= %s"
+            params.append(from_date)
+
+        if to_date is not None:
+            query += " AND d.timestamp_end <= %s"
+            params.append(to_date)
+
+        if is_collision is not None:
+            query += " AND d.is_collision = %s"
+            params.append(is_collision)
+
+        cursor = self.connection.cursor(dictionary=True)
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        cursor.close()
+
+        return results
+
+    def get_batches(
+        self,
+        tank_id: Optional[int] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None
+    ):
+        """
+        Pobiera wszystkie batche (gruszki) z listą powiązanych dozowań.
+        Każde dozowanie zawiera nazwę zbiornika.
+        Opcjonalne filtry: tank_id, from_date, to_date
+        """
+        query = """
+        SELECT 
+            b.id AS batch_id,
+            b.timestamp_start AS batch_start,
+            b.timestamp_end AS batch_end,
+            d.id AS dosage_id,
+            d.value_start,
+            d.value_end,
+            d.timestamp_start AS dosage_start,
+            d.timestamp_end AS dosage_end,
+            d.is_collision,
+            d.value_difference,
+            d.collision_value_difference,
+            d.time_difference,
+            d.dosing_speed_factor,
+            d.tank_id,
+            d.type,
+            t.tank_name
+        FROM `akces-dms`.`batches` AS b
+        LEFT JOIN `akces-dms`.`batch_dosing_event` AS bde ON b.id = bde.batch_id
+        LEFT JOIN `akces-dms`.`dosing_events` AS d ON bde.dosing_event_id = d.id
+        LEFT JOIN `akces-dms`.`tanks` AS t ON d.tank_id = t.id
+        WHERE 1=1
+        """
+        params = []
+
+        if tank_id is not None:
+            query += " AND d.tank_id = %s"
+            params.append(tank_id)
+
+        if from_date is not None:
+            query += " AND b.timestamp_start >= %s"
+            params.append(from_date)
+
+        if to_date is not None:
+            query += " AND b.timestamp_end <= %s"
+            params.append(to_date)
+
+        cursor = self.connection.cursor(dictionary=True)
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        cursor.close()
+
+        # agregacja po batch_id
+        batches = {}
+        for row in results:
+            batch_id = row["batch_id"]
+            if batch_id not in batches:
+                batches[batch_id] = {
+                    "id": batch_id,
+                    "timestampStart": row["batch_start"],
+                    "timestampEnd": row["batch_end"],
+                    "dosages": []
+                }
+
+            if row["dosage_id"] is not None:  # tylko jeśli istnieje dozowanie
+                dosage = {
+                    "id": row["dosage_id"],
+                    "valueStart": row["value_start"],
+                    "valueEnd": row["value_end"],
+                    "timestampStart": row["dosage_start"],
+                    "timestampEnd": row["dosage_end"],
+                    "isCollision": bool(row["is_collision"]),
+                    "valueDifference": row["value_difference"],
+                    "collisionValueDifference": row["collision_value_difference"],
+                    "timeDifference": row["time_difference"],
+                    "dosingSpeedFactor": row["dosing_speed_factor"],
+                    "tankId": row["tank_id"],
+                    "tankName": row["tank_name"],
+                    "type": row["type"]
+                }
+                batches[batch_id]["dosages"].append(dosage)
+
+        return list(batches.values())
+
+    def get_last_batch(self):
+        """
+        Zwraca ostatnią gruszkę z listą powiązanych dozowań.
+        """
+        # 1. Pobierz ostatnią gruszkę
+        query_batch = """
+        SELECT id, timestamp_start AS batch_start, timestamp_end AS batch_end
+        FROM `akces-dms`.`batches`
+        ORDER BY timestamp_start DESC
+        LIMIT 1
+        """
+        cursor = self.connection.cursor(dictionary=True)
+        cursor.execute(query_batch)
+        batch_row = cursor.fetchone()
+        if not batch_row:
+            cursor.close()
+            return None
+
+        batch_id = batch_row["id"]
+        batch = {
+            "id": batch_id,
+            "timestampStart": batch_row["batch_start"],
+            "timestampEnd": batch_row["batch_end"],
+            "dosages": []
+        }
+
+        # 2. Pobierz powiązane dozowania wraz z nazwami zbiorników
+        query_dosages = """
+        SELECT 
+            d.id AS dosage_id,
+            d.value_start,
+            d.value_end,
+            d.timestamp_start AS dosage_start,
+            d.timestamp_end AS dosage_end,
+            d.is_collision,
+            d.value_difference,
+            d.collision_value_difference,
+            d.time_difference,
+            d.dosing_speed_factor,
+            d.tank_id,
+            d.type,
+            t.tank_name
+        FROM `akces-dms`.`batch_dosing_event` AS bde
+        JOIN `akces-dms`.`dosing_events` AS d ON bde.dosing_event_id = d.id
+        JOIN `akces-dms`.`tanks` AS t ON d.tank_id = t.id
+        WHERE bde.batch_id = %s
+        """
+        cursor.execute(query_dosages, (batch_id,))
+        dosages_rows = cursor.fetchall()
+        cursor.close()
+
+        for row in dosages_rows:
+            dosage = {
+                "id": row["dosage_id"],
+                "valueStart": row["value_start"],
+                "valueEnd": row["value_end"],
+                "timestampStart": row["dosage_start"],
+                "timestampEnd": row["dosage_end"],
+                "isCollision": bool(row["is_collision"]),
+                "valueDifference": row["value_difference"],
+                "collisionValueDifference": row["collision_value_difference"],
+                "timeDifference": row["time_difference"],
+                "dosingSpeedFactor": row["dosing_speed_factor"],
+                "tankId": row["tank_id"],
+                "tankName": row["tank_name"],
+                "type": row["type"]
+            }
+            batch["dosages"].append(dosage)
+
+        return batch
 
     def close(self):
         """Zamknięcie połączenia z bazą."""

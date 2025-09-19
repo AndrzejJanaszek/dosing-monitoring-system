@@ -16,6 +16,7 @@ class __SerialManager:
 
         self._stop_event = threading.Event()
         self.signal_data_event = threading.Event()
+        self.tank_data_update_event = threading.Event()
 
         self._threads: List[threading.Thread] = []
 
@@ -66,6 +67,7 @@ class __SerialManager:
             if data:
                 with self.data_locks[path]:
                     self.latest_data[path] = data
+                    self.tank_data_update_event.set()
             threading.Event().wait(self.VALUE_READ_DELAY)
 
     def _signal_reading_loop(self):

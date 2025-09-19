@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from typing import Optional
+from fastapi import FastAPI, Query
 from fastapi.responses import StreamingResponse
 import json
 import time
@@ -23,7 +24,7 @@ def create_api(core):
         to_date: Optional[str] = Query(None, alias="to")
     ):
         # return pomiary z bazy z filtrami
-        pass
+        return core["db"].get_measurements(tank_id, from_date, to_date)
 
     @app.get("/dosages")
     def get_dosages(
@@ -33,7 +34,7 @@ def create_api(core):
         is_collision: Optional[bool] = None
     ):
         # return lista dosages z filtrami
-        pass
+        return core["db"].get_dosages(tank_id, from_date, to_date, is_collision)
 
     @app.get("/batches")
     def get_batches(
@@ -42,22 +43,41 @@ def create_api(core):
         to_date: Optional[str] = Query(None, alias="to")
     ):
         # return lista batchy
-        pass
+        return core["db"].get_batches(tank_id, from_date, to_date)
 
-    @app.get("/batches/last")
-    def get_last_batch():
-        # return ostatnia gruszka
-        pass
+    
+    @app.get("/batches/last/stream")
+    def stream_last_batch():
+        def event_generator():
+            event = core["db"].batch_update_event
+            while True:
+                event.wait()
+                event.clear()
+
+                last_batch = core["db"].get_last_batch()
+                yield f"data: {json.dumps(last_batch)}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 
     @app.get("/tanks/values/stream")
     def stream_tanks_values():
         def event_generator():
+            event = core["serial"].tank_data_update_event
             while True:
-                data = [{"id": t.id, "name": t.name, "value": t.current_value} for t in core["tanks"]]
+                # czekamy aż pojawi się nowa wartość
+                event.wait()
+                event.clear()
+
+                data = [
+                    {"id": t.id, "name": t.name, "value": core["serial"].get_tank_data(t.port)}
+                    for t in core["tanks"]
+                ]
                 yield f"data: {json.dumps(data)}\n\n"
-                time.sleep(1)  # co sekundę lub wg zdarzenia
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # 
+    # ----------------------------------------------
+    # 
     return app
