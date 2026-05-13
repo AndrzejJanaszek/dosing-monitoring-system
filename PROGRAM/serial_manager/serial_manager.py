@@ -1,6 +1,7 @@
 import threading
 from typing import List, Dict, Optional
 
+from event_detector.event_detector import EventDetector
 from models.transmition import TransmitionFormat
 from .serial_wrapper import SerialPortWrapper
 
@@ -8,6 +9,9 @@ class __SerialManager:
     # todo to jest z configa * podczas inicjalizacji obiektu
 
     def __init__(self):
+    # def __init__(self, event_detector: EventDetector):
+        self.event_detector = None
+
         self.tank_serial_connections: List[SerialPortWrapper] = []
         self.signal_serial_connection: Optional[SerialPortWrapper] = None
 
@@ -21,13 +25,16 @@ class __SerialManager:
         self._threads: List[threading.Thread] = []
 
     def setup_configuration(self,
-                 tank_serial_paths: Optional[List[str]],
-                 signal_serial_path: Optional[str],
-                 serial_timeout: Optional[float] = 3.0,
-                 value_read_delay: Optional[float] = 0.1,
-                 signal_read_delay: Optional[float] = 0.1,
-                 tank_transmition_format: Optional[TransmitionFormat] = TransmitionFormat.ASCII,
-                 signal_transmition_format: Optional[TransmitionFormat] = TransmitionFormat.ASCII):
+                        event_detector: EventDetector,
+                        tank_serial_paths: Optional[List[str]],
+                        signal_serial_path: Optional[str],
+                        serial_timeout: Optional[float] = 3.0,
+                        value_read_delay: Optional[float] = 0.1,
+                        signal_read_delay: Optional[float] = 0.1,
+                        tank_transmition_format: Optional[TransmitionFormat] = TransmitionFormat.ASCII,
+                        signal_transmition_format: Optional[TransmitionFormat] = TransmitionFormat.ASCII):
+
+        self.event_detector = event_detector
 
         self.SERIAL_TIMEOUT = serial_timeout
         self.VALUE_READ_DELAY = value_read_delay
@@ -78,6 +85,8 @@ class __SerialManager:
                 with self.data_locks["signal"]:
                     self.latest_data["signal"] = data
                     self.signal_data_event.set()
+                
+                self.event_detector.notify(data=data)
             threading.Event().wait(self.SIGNAL_READ_DELAY)
 
     def start_threads(self):

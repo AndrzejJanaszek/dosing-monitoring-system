@@ -60,7 +60,7 @@ class __DatabaseManager:
         print(f"[MOCK] Zapis pomiaru: {data}")
         print()
 
-    def save_dosage(self, data: DosageEvent, tank_id: int, event_type_int: int):
+    def save_dosage(self, data: DosageEvent, tank_id: int,):
         query = """
             INSERT INTO `akces-dms`.`dosing_events`
             (value_start, value_end, timestamp_start, timestamp_end,
@@ -69,7 +69,7 @@ class __DatabaseManager:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
-        event_type_name = EventType.IN.name if event_type_int == 0 else EventType.OUT.name
+        event_type_name = EventType.IN.name if data.type == 0 else EventType.OUT.name
 
         values = (
             data.measurement_start.value,
@@ -94,7 +94,7 @@ class __DatabaseManager:
         :param data: DosageEvent
         """
         print("\ntank_id: ", tank_id)
-        print("\nevent_type_int: ", event_type_int)
+        print("\nevent_type_int: ", data.type)
         print("\nevent_type_name: ", event_type_name)
         data.print_state()
         print()

@@ -1,41 +1,19 @@
-import copy
-from enum import Enum
-import re
-from typing import Tuple, List
-import json
+from typing import List
 
 import threading
 
+from parsers.parsers import parse_signal_json, parse_tank_data
 from models.tank import Tank
-from serial_manager.serial_manager import serial_manager, __SerialManager
-from database_manager.database_manager import database_manager, __DatabaseManager
+# from serial_manager.serial_manager import __SerialManager
+# from database_manager.database_manager import __DatabaseManager
 
 from models.dosage_event import EventType
 from models.measurement import Measurement
 
-def parse_signal_json(signal_json: str) -> dict[int, int]:
-    try:
-        data = json.loads(signal_json)
-        return {int(k): int(v) for k, v in data.items()}
-    except (json.JSONDecodeError, ValueError, TypeError) as e:
-        print(f"Błąd parsowania sygnału: {e}")
-        return {}
-    
-def parse_tank_data(tank_data: str) -> float:
-    try:
-        match = re.search(r"[-+]?\d*\.?\d+", tank_data)
-        if match:
-            return float(match.group())
-        else:
-            raise ValueError("Brak liczby w ciągu")
-    except Exception as e:
-        print(f"Błąd parsowania danych: {e}")
-        return 0.0
-
 # tank list
 # serialManager -> event
 # databaseManager -> for handling function\
-def dosing_monitoring_thread_fn(serial_manager: __SerialManager, database_manager: __DatabaseManager, tanks: List[Tank]):
+def dosing_monitoring_thread_fn(serial_manager, database_manager, tanks: List[Tank]):
     while True:    
         # read signal data
         serial_manager.signal_data_event.wait()

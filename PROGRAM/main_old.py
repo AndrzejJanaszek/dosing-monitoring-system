@@ -3,8 +3,8 @@ import json
 from models.tank import Tank
 from models.transmition import TransmitionFormat
 
-from serial_manager.serial_manager import serial_manager, __SerialManager
-from database_manager.database_manager import database_manager, __DatabaseManager
+from serial_manager.serial_manager import serial_manager
+from database_manager.database_manager import database_manager
 
 import threading
 

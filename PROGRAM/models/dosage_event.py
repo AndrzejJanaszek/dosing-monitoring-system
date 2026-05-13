@@ -19,6 +19,7 @@ class DosageEvent:
         self.dosing_speed_factor = 0
         self.isCollision: bool = False
         self.isRuning: bool = False
+        self.type: EventType = None
 
     def clear(self):
         self.measurement_start: Measurement = Measurement()
@@ -29,6 +30,7 @@ class DosageEvent:
         self.dosing_speed_factor = 0
         self.isCollision: bool = False
         self.isRuning: bool = False
+        # self.type: EventType = None
 
 
     def calculate_parameters(self):

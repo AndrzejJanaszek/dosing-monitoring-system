@@ -1,5 +1,7 @@
 import json
 import threading
+from event_change_handler.event_change_handler import EventChangeHandler
+from event_detector.event_detector import EventDetector
 from database_manager.database_manager import database_manager
 from serial_manager.serial_manager import serial_manager
 from models.tank import Tank
@@ -60,9 +62,16 @@ def create_core():
 
     # <END> DEV -- DEV -- DEV -- DEV -- DEV -- DEV -- DEV
 
+    event_change_handler = EventChangeHandler(
+        tanks=tanks,
+        serial_reader=serial_manager,
+        db_manager=database_manager
+    )
+    event_detector = EventDetector(change_handler=event_change_handler)
 
     # Serial manager
     serial_manager.setup_configuration(
+        event_detector=event_detector,
         tank_serial_paths=[t.port for t in tanks],
         signal_serial_path=CONFIG_SIGNAL_PORT,
         serial_timeout=3,
@@ -95,16 +104,16 @@ def create_core():
     )
     cycle_thread.start()
 
-    dosing_thread = threading.Thread(
-        target=dosing_monitoring_thread_fn,
-        kwargs=dict(
-            serial_manager=serial_manager,
-            database_manager=database_manager,
-            tanks=tanks,
-        ),
-        name="DosingMonitoringThread"
-    )
-    dosing_thread.start()
+    # dosing_thread = threading.Thread(
+    #     target=dosing_monitoring_thread_fn,
+    #     kwargs=dict(
+    #         serial_manager=serial_manager,
+    #         database_manager=database_manager,
+    #         tanks=tanks,
+    #     ),
+    #     name="DosingMonitoringThread"
+    # )
+    # dosing_thread.start()
 
     return {
         "db": database_manager,

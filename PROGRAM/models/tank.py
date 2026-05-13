@@ -14,6 +14,9 @@ class Tank:
         self.id = id
 
         self.events: Tuple[DosageEvent, DosageEvent] = (DosageEvent(), DosageEvent())
+        self.events[0].type = EventType.IN
+        self.events[1].type = EventType.OUT
+
         self.collision_points: List[Measurement] = []
         
         self.dispense_speed_factor: float = -1000.0
@@ -34,7 +37,33 @@ class Tank:
             # add collision_point
             self.collision_points.append(copy.deepcopy(measurement))
 
-    def set_event_end(self, event_type: EventType, measurement: Measurement):
+    def set_event_start(self, event_type: EventType, measurement: Measurement):
+        # store data
+        self.events[event_type].clear()
+        self.events[event_type].measurement_start = copy.deepcopy(measurement)
+        self.events[event_type].isRuning = True
+        self.statuses[event_type] = 1
+
+        # collision detection
+        if self.check_event_collision():
+            # add collision status to both events
+            for event in self.events:
+                event.isCollision = True
+
+            # add collision_point
+            self.collision_points.append(copy.deepcopy(measurement))
+        
+    def set_event_end(self, pin, measurement: Measurement):
+        event_type: EventType = -1
+        
+        if self.pins[0] == pin:
+            event_type = 0  # IN
+        elif self.pins[1] == pin:
+            event_type = 1  # OUT
+        else:
+            # Error
+            raise Exception("[Error]: event_type can not be defined, because pin not found in self.pins.")
+        
         # store data
         self.events[event_type].measurement_end = copy.deepcopy(measurement)
         self.events[event_type].calculate_parameters()  # value_difference, time_difference and dosing_speed_factor
@@ -49,6 +78,9 @@ class Tank:
 
     # todo make two following methods priv
     def check_event_collision(self) -> bool: 
+        # todo: change to:
+        # return (self.events[0].isRuning and self.events[1].isRuning)
+
         if self.events[0].isRuning and self.events[1].isRuning:
             return True
         return False
