@@ -34,6 +34,7 @@ class EventDetector:
 
             # state changed
             if prev_value != value:
+                print("State change detected")
 
                 self.change_handler.notify(
                     target_status=value,

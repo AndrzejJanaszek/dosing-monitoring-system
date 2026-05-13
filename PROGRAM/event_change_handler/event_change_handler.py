@@ -34,6 +34,8 @@ class EventChangeHandler:
         pin: number of pin that changed state/status 
         """
 
+        print("Handling event change")
+
         if pin not in self.pin_map:
             raise ValueError(f"Nieznany pin: {pin}")
 
@@ -48,10 +50,10 @@ class EventChangeHandler:
         
         # start 
         if target_status == 1:   # -> start
-            tank.set_event_start(event_type=event_type, measurement=measurement)
+            tank.set_event_start(event_type=event_type.value, measurement=measurement)
 
         elif target_status == 0:
-            tank.set_event_end(event_type=event_type, measurement=measurement)
+            tank.set_event_end(event_type=event_type.value, measurement=measurement)
             self.db_manager.save_dosage(
                 tank.events[event_type.value], tank.id
             )

@@ -53,17 +53,7 @@ class Tank:
             # add collision_point
             self.collision_points.append(copy.deepcopy(measurement))
         
-    def set_event_end(self, pin, measurement: Measurement):
-        event_type: EventType = -1
-        
-        if self.pins[0] == pin:
-            event_type = 0  # IN
-        elif self.pins[1] == pin:
-            event_type = 1  # OUT
-        else:
-            # Error
-            raise Exception("[Error]: event_type can not be defined, because pin not found in self.pins.")
-        
+    def set_event_end(self, event_type: EventType, measurement: Measurement):
         # store data
         self.events[event_type].measurement_end = copy.deepcopy(measurement)
         self.events[event_type].calculate_parameters()  # value_difference, time_difference and dosing_speed_factor
