@@ -31,7 +31,7 @@ Pass extra pytest arguments through `ARGS`, e.g. `make test-unit ARGS='-k parser
 
 ## Development environment
 
-Target system: Ubuntu 26.04 (the same as the production thin client). PostgreSQL is not installed locally; tests run it in containers (testcontainers).
+Target system: Ubuntu 26.04 (the same as the production thin client). PostgreSQL is not installed locally; it runs in containers (see [Database](#database)).
 
 ### uv
 
@@ -104,3 +104,45 @@ docker stop pg-check
 ```
 
 `pg_isready` may report `no response` for a few seconds while the server starts.
+
+## Database
+
+PostgreSQL 18. The database is set up by plain SQL files in `scripts/db/`, run by `psql` in development and by `psycopg` in tests:
+
+- `roles.sql` creates the roles; running it again changes nothing. Roles are shared by the whole server.
+- `database.sql` runs inside a freshly created database: it limits `CONNECT` to the DMS roles and creates the `dms` schema owned by `dms_owner`.
+
+| Role | Login | Purpose |
+|---|---|---|
+| `dms_owner` | yes | owns the `dms` schema; used only by `dms-migrate` |
+| `dms_writer` | yes | acquisition service; writes data, no DDL |
+| `dms_read` | no | group with read access |
+| `dms_api` | yes | API; member of `dms_read` |
+
+Table privileges are granted by migrations. `roles.sql` sets no passwords.
+
+### Development database
+
+```bash
+scripts/db-reset.sh
+```
+
+Starts the container `dms-dev-pg` (image `postgres:18`, data in the volume `dms-dev-pg-data`, port `5432` on `127.0.0.1` only) or reuses it if it already exists, then drops and recreates the database `dms`. Run it the first time and whenever you want a clean database; roles survive a reset.
+
+Development passwords, for this container only: superuser `postgres` / `postgres`, roles `dms_owner`, `dms_writer` and `dms_api` / `dms`.
+
+```bash
+docker exec -it dms-dev-pg psql -U postgres -d dms
+```
+
+### Integration tests
+
+Integration tests need Docker: testcontainers starts one `postgres:18` container per test session. Each session creates its own database `dms_test_<random>` and drops it at the end.
+
+Without Docker, point the tests at an existing server with a superuser account:
+
+```bash
+DMS_TEST_PG_URL=postgresql://postgres:postgres@localhost:5432/postgres make test-integration
+```
+
+The tests then use that server instead of a container. They still work in their own `dms_test_*` database, so the development database `dms` is left untouched; roles are created there if missing.
