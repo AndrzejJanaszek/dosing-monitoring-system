@@ -1,6 +1,7 @@
 import os
 import secrets
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
@@ -9,6 +10,9 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 from testcontainers.community.postgres import PostgresContainer
+
+from dms.persistence.migrate import apply_migrations
+from dms.persistence.schema import load_migrations
 
 DB_SCRIPTS_DIR = Path(__file__).parents[2] / "scripts" / "db"
 POSTGRES_IMAGE = "postgres:18"
@@ -29,8 +33,8 @@ def pg_server() -> Iterator[str]:
         yield container.get_connection_url()
 
 
-@pytest.fixture(scope="session")
-def dms_database(pg_server: str) -> Iterator[str]:
+@contextmanager
+def temporary_database(pg_server: str) -> Iterator[str]:
     database_name = f"dms_test_{secrets.token_hex(4)}"
     database_identifier = sql.Identifier(database_name)
     with psycopg.connect(pg_server, autocommit=True) as server:
@@ -43,6 +47,39 @@ def dms_database(pg_server: str) -> Iterator[str]:
             yield database_url
         finally:
             server.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(database_identifier))
+
+
+def migrate_as_owner(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute("SET ROLE dms_owner")
+        apply_migrations(connection, load_migrations())
+
+
+@pytest.fixture(scope="session")
+def dms_database(pg_server: str) -> Iterator[str]:
+    with temporary_database(pg_server) as database_url:
+        yield database_url
+
+
+@pytest.fixture(scope="session")
+def migrated_database(dms_database: str) -> str:
+    migrate_as_owner(dms_database)
+    return dms_database
+
+
+@pytest.fixture
+def fresh_database(pg_server: str) -> Iterator[str]:
+    with temporary_database(pg_server) as database_url:
+        yield database_url
+
+
+@pytest.fixture
+def migrated_connection(migrated_database: str) -> Iterator[psycopg.Connection[TupleRow]]:
+    connection = psycopg.connect(migrated_database)
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 @pytest.fixture
