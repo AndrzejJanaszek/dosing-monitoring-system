@@ -94,3 +94,9 @@ def dms_connection(dms_database: str) -> Iterator[psycopg.Connection[TupleRow]]:
         yield connection
     finally:
         connection.close()
+
+
+def connect_as(database_url: str, role: str) -> psycopg.Connection[TupleRow]:
+    connection = psycopg.connect(database_url, autocommit=True)
+    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+    return connection
