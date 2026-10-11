@@ -1,0 +1,30 @@
+[importlinter]
+root_package = dms
+
+[importlinter:contract:domain-without-infrastructure]
+name = Domain does not import infrastructure, processes or configuration
+type = forbidden
+source_modules =
+    dms.domain
+forbidden_modules =
+    dms.acquisition
+    dms.persistence
+    dms.ipc
+    dms.api
+    dms.config
+
+[importlinter:contract:processes-independent]
+name = API and acquisition do not import each other
+type = independence
+modules =
+    dms.api
+    dms.acquisition
+
+[importlinter:contract:persistence-below-processes]
+name = Persistence does not import API or acquisition
+type = forbidden
+source_modules =
+    dms.persistence
+forbidden_modules =
+    dms.api
+    dms.acquisition

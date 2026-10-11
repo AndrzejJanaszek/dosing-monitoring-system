@@ -35,4 +35,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ## Code
 
-No comments or docstrings in the code. Names of functions, classes and variables should make the code self-explanatory; where they don't, rewrite the code rather than explain it in a comment. An outdated comment is worse than none.
+- Names of functions, classes and variables should make the code self-explanatory; where they don't, prefer rewriting the code over explaining it in a comment. An outdated comment is worse than none.
+- Comments are rare and added deliberately by a human. AI-generated code contains no comments or docstrings, including tool suppressions such as `# noqa` and `# type: ignore`; rule exceptions for whole files go to `pyproject.toml`.
+- No magic numbers: give numeric constants a name. Tests may use literal values where a name would add nothing. Ruff's `PLR2004` enforces this only for comparisons, so the rest is up to the author and the reviewer.
+- Run `make check` before opening a pull request.
