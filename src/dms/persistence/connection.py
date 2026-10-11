@@ -10,6 +10,7 @@ from dms.config.models import DatabaseConfig
 from dms.logs import events
 
 CONNECT_TIMEOUT_S = 30.0
+CONNECT_ATTEMPT_TIMEOUT_S = 5
 RETRY_INTERVAL_S = 1.0
 
 
@@ -18,7 +19,13 @@ class StartupError(Exception):
 
 
 def build_conninfo(database: DatabaseConfig, role: str) -> str:
-    return make_conninfo(host=database.host, port=database.port, dbname=database.dbname, user=role)
+    return make_conninfo(
+        host=database.host,
+        port=database.port,
+        dbname=database.dbname,
+        user=role,
+        connect_timeout=CONNECT_ATTEMPT_TIMEOUT_S,
+    )
 
 
 def connect_with_retry(

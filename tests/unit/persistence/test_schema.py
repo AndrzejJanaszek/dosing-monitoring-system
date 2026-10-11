@@ -69,6 +69,13 @@ def test_missing_header_is_rejected(tmp_path: Path) -> None:
         load_migrations(tmp_path)
 
 
+def test_file_that_is_not_utf8_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "0001_init.sql").write_bytes(b"-- schema-change: major\nSELECT '\xff';\n")
+
+    with pytest.raises(MigrationFilesError, match=r"0001_init\.sql: not valid UTF-8"):
+        load_migrations(tmp_path)
+
+
 def test_unknown_change_kind_is_rejected(tmp_path: Path) -> None:
     write_migration(tmp_path, "0001_init.sql", "huge")
 

@@ -1,9 +1,12 @@
 import re
 from decimal import Decimal
 
+from dms.acquisition.meters.parsing import OutOfRange
+
 STATUS_STABLE = "ST"
 STATUS_UNSTABLE = "US"
 VALID_STATUSES = frozenset({STATUS_STABLE, STATUS_UNSTABLE})
+OUT_OF_RANGE_STATUSES = frozenset(status.value for status in OutOfRange)
 UNIT_KG = "kg"
 WEIGHT_FIELD_WIDTH = 8
 FIELD_SEPARATOR = ","
@@ -12,7 +15,7 @@ FIELD_COUNT = 3
 WEIGHT_FIELD_PATTERN = re.compile(r"^ *[+-]?(\d+\.?\d*|\.\d+)$")
 
 
-def parse_dgtp_frame(frame: bytes) -> int | None:
+def parse_dgtp_frame(frame: bytes) -> int | OutOfRange | None:
     try:
         text = frame.decode("ascii")
     except UnicodeDecodeError:
@@ -21,8 +24,16 @@ def parse_dgtp_frame(frame: bytes) -> int | None:
     if len(fields) != FIELD_COUNT:
         return None
     status, weight, unit = fields
-    if status not in VALID_STATUSES or unit != UNIT_KG:
+    if unit != UNIT_KG:
         return None
+    if status in OUT_OF_RANGE_STATUSES:
+        return OutOfRange(status)
+    if status not in VALID_STATUSES:
+        return None
+    return _parse_weight(weight)
+
+
+def _parse_weight(weight: str) -> int | None:
     if len(weight) != WEIGHT_FIELD_WIDTH or WEIGHT_FIELD_PATTERN.match(weight) is None:
         return None
     return round(Decimal(weight.strip()))

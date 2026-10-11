@@ -1,6 +1,6 @@
 import queue
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 import structlog
 
@@ -19,13 +19,11 @@ class Engine:
         in_queue: queue.Queue[EngineMessage],
         out_queue: queue.Queue[MeterRecord],
         silos_by_meter: Mapping[str, Silo],
-        silos: Sequence[Silo],
         stop_event: threading.Event,
     ) -> None:
         self._in_queue = in_queue
         self._out_queue = out_queue
         self._silos_by_meter = silos_by_meter
-        self._silos = silos
         self._stop_event = stop_event
 
     def run(self) -> None:
@@ -58,7 +56,7 @@ class Engine:
             if silo is not None:
                 silo.on_reading(message)
         elif isinstance(message, Tick):
-            for silo in self._silos:
+            for silo in self._silos_by_meter.values():
                 record = silo.on_tick(message)
                 if record is not None:
                     self._out_queue.put(record)

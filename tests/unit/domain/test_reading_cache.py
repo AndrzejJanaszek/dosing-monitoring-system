@@ -9,43 +9,60 @@ def reading(mono_s: float, value_kg: int = 0) -> MeterReading:
 
 
 def test_empty_cache_has_no_reading() -> None:
-    assert ReadingCache(60 * SECOND_NS).at_or_before(10 * SECOND_NS) is None
+    assert ReadingCache().advance_to(10 * SECOND_NS) is None
 
 
 def test_returns_latest_reading_not_after_the_given_time() -> None:
-    cache = ReadingCache(60 * SECOND_NS)
+    cache = ReadingCache()
     for second in (1, 2, 3):
         cache.add(reading(second, value_kg=second))
 
-    found = cache.at_or_before(round(2.5 * SECOND_NS))
+    found = cache.advance_to(round(2.5 * SECOND_NS))
 
     assert found is not None
     assert found.value_kg == 2
 
 
 def test_reading_exactly_at_the_given_time_is_included() -> None:
-    cache = ReadingCache(60 * SECOND_NS)
+    cache = ReadingCache()
     cache.add(reading(5, value_kg=5))
 
-    found = cache.at_or_before(5 * SECOND_NS)
+    found = cache.advance_to(5 * SECOND_NS)
 
     assert found is not None
     assert found.value_kg == 5
 
 
-def test_reading_after_the_given_time_is_ignored() -> None:
-    cache = ReadingCache(60 * SECOND_NS)
-    cache.add(reading(5))
+def test_reading_after_the_given_time_is_ignored_and_kept() -> None:
+    cache = ReadingCache()
+    cache.add(reading(5, value_kg=5))
 
-    assert cache.at_or_before(4 * SECOND_NS) is None
-
-
-def test_readings_older_than_the_window_are_dropped() -> None:
-    cache = ReadingCache(10 * SECOND_NS)
-    cache.add(reading(1, value_kg=1))
-    cache.add(reading(20, value_kg=20))
-
-    assert cache.at_or_before(5 * SECOND_NS) is None
-    found = cache.at_or_before(20 * SECOND_NS)
+    assert cache.advance_to(4 * SECOND_NS) is None
+    found = cache.advance_to(6 * SECOND_NS)
     assert found is not None
-    assert found.value_kg == 20
+    assert found.value_kg == 5
+
+
+def test_readings_older_than_the_returned_one_are_dropped() -> None:
+    cache = ReadingCache()
+    for second in (1, 2, 3, 4):
+        cache.add(reading(second, value_kg=second))
+
+    cache.advance_to(round(2.5 * SECOND_NS))
+
+    assert len(cache) == 3
+    found = cache.advance_to(round(2.5 * SECOND_NS))
+    assert found is not None
+    assert found.value_kg == 2
+
+
+def test_last_reading_is_kept_for_later_ticks() -> None:
+    cache = ReadingCache()
+    cache.add(reading(1, value_kg=1))
+
+    cache.advance_to(5 * SECOND_NS)
+    found = cache.advance_to(6 * SECOND_NS)
+
+    assert found is not None
+    assert found.value_kg == 1
+    assert len(cache) == 1

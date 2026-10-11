@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
 
 import psycopg
 from psycopg.rows import TupleRow
@@ -15,7 +15,6 @@ SCHEMA_NAME = "dms"
 MIGRATION_TABLE = "schema_migration"
 MIGRATION_FILE_PATTERN = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 CHANGE_HEADER_PATTERN = re.compile(r"^-- schema-change: (major|minor|patch)$")
-CHANGE_KINDS: tuple[ChangeKind, ...] = ("major", "minor", "patch")
 FIRST_MIGRATION_VERSION = 1
 
 
@@ -88,13 +87,17 @@ def load_migrations(directory: Traversable | None = None) -> list[Migration]:
                 f"{entry.name}: expected number {expected_number:04d}, numbers must be continuous"
             )
         raw = entry.read_bytes()
-        change = _read_change_kind(entry.name, raw.decode("utf-8"))
+        try:
+            sql = raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise MigrationFilesError(f"{entry.name}: not valid UTF-8 ({error})") from error
+        change = _read_change_kind(entry.name, sql)
         current_version = current_version.bumped(change)
         migrations.append(
             Migration(
                 version=expected_number,
                 name=match.group(2),
-                sql=raw.decode("utf-8"),
+                sql=sql,
                 checksum=hashlib.sha256(raw).hexdigest(),
                 change=change,
                 schema_version=current_version,
@@ -110,10 +113,7 @@ def _read_change_kind(file_name: str, sql: str) -> ChangeKind:
         raise MigrationFilesError(
             f"{file_name}: first line must be '-- schema-change: major|minor|patch'"
         )
-    for kind in CHANGE_KINDS:
-        if kind == match.group(1):
-            return kind
-    raise MigrationFilesError(f"{file_name}: unknown change kind")
+    return cast(ChangeKind, match.group(1))
 
 
 def package_schema_version(migrations: Sequence[Migration] | None = None) -> SchemaVersion:

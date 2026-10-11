@@ -105,13 +105,16 @@ def test_store_writes_and_ignores_duplicates(
     store = PostgresRecordStore(writer_connection, lambda: connect_as(fresh_database, WRITER_ROLE))
     batch = [MeterRecord(1, BASE_NS, 100), MeterRecord(1, BASE_NS + 1_000_000_000, 120)]
 
-    store.write(batch)
-    store.write(batch)
+    first_inserted = store.write(batch)
+    second_inserted = store.write([*batch, MeterRecord(1, BASE_NS + 2_000_000_000, 140)])
+
+    assert (first_inserted, second_inserted) == (2, 1)
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT silo_id, value_kg FROM dms.meter_reading ORDER BY t") == [
             (1, 100),
             (1, 120),
+            (1, 140),
         ]
 
 
@@ -177,7 +180,7 @@ def test_writer_survives_terminated_connection(
         store=store,
         stop_event=threading.Event(),
         retry_delay_s=0,
-        sleep=lambda _seconds: None,
+        wait=lambda _seconds: False,
     )
     in_queue.put(MeterRecord(1, BASE_NS, 100))
     writer.step()

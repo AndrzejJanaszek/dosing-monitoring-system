@@ -1,6 +1,8 @@
 import time
 from typing import Protocol
 
+NS_PER_S = 1_000_000_000
+
 
 class Clock(Protocol):
     def wall_ns(self) -> int: ...

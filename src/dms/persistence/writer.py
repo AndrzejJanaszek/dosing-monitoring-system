@@ -30,8 +30,14 @@ class TransientStoreError(Exception):
     pass
 
 
+class WriterAbandonedError(Exception):
+    def __init__(self, lost_records: int) -> None:
+        super().__init__(f"{lost_records} records were not written")
+        self.lost_records = lost_records
+
+
 class RecordStore(Protocol):
-    def write(self, records: Sequence[MeterRecord]) -> None: ...
+    def write(self, records: Sequence[MeterRecord]) -> int: ...
 
     def reconnect(self) -> None: ...
 
@@ -57,7 +63,7 @@ class PostgresRecordStore:
     def connection(self) -> psycopg.Connection[TupleRow]:
         return self._connection
 
-    def write(self, records: Sequence[MeterRecord]) -> None:
+    def write(self, records: Sequence[MeterRecord]) -> int:
         rows = [
             (record.silo_id, timestamp_from_ns(record.wall_ns), record.value_kg)
             for record in records
@@ -65,6 +71,7 @@ class PostgresRecordStore:
         try:
             with self._connection.transaction(), self._connection.cursor() as cursor:
                 cursor.executemany(INSERT_METER_READING_SQL, rows)
+                return cursor.rowcount
         except psycopg.Error as error:
             if _is_transient(error):
                 raise TransientStoreError(str(error)) from error
@@ -91,7 +98,7 @@ class Writer:
         monotonic: Callable[[], float] = time.monotonic,
         max_batch: int = MAX_BATCH,
         retry_delay_s: float = RETRY_DELAY_S,
-        sleep: Callable[[float], None] = time.sleep,
+        wait: Callable[[float], bool] | None = None,
     ) -> None:
         self._in_queue = in_queue
         self._store = store
@@ -99,17 +106,23 @@ class Writer:
         self._monotonic = monotonic
         self._max_batch = max_batch
         self._retry_delay_s = retry_delay_s
-        self._sleep = sleep
+        self._wait = wait if wait is not None else stop_event.wait
         self._logger = structlog.get_logger()
+        self.flushed = False
 
     def run(self) -> None:
         try:
             while not self._stop_event.is_set():
                 self.step()
             self._flush_remaining()
+        except WriterAbandonedError as error:
+            lost_records = error.lost_records + self._discard_queue()
+            self._logger.error(events.WRITER_ABANDONED, lost_records=lost_records)
+            return
         except Exception as error:
             self._logger.critical(events.WRITER_FATAL, error=repr(error))
             raise
+        self.flushed = True
 
     def step(self) -> None:
         try:
@@ -125,6 +138,15 @@ class Writer:
             except queue.Empty:
                 return
             self._write_with_retry(self._collect_batch(first))
+
+    def _discard_queue(self) -> int:
+        discarded = 0
+        while True:
+            try:
+                self._in_queue.get_nowait()
+            except queue.Empty:
+                return discarded
+            discarded += 1
 
     def _collect_batch(self, first: MeterRecord) -> list[MeterRecord]:
         batch = [first]
@@ -143,7 +165,7 @@ class Writer:
                 if needs_reconnect:
                     self._store.reconnect()
                     needs_reconnect = False
-                self._store.write(batch)
+                inserted = self._store.write(batch)
                 break
             except TransientStoreError as error:
                 if failed_since is None:
@@ -151,8 +173,14 @@ class Writer:
                     self._logger.warning(
                         events.DB_WRITE_ERROR, error=str(error), batch_size=len(batch)
                     )
+                if self._stop_event.is_set():
+                    raise WriterAbandonedError(len(batch)) from error
                 needs_reconnect = True
-                self._sleep(self._retry_delay_s)
+                self._wait(self._retry_delay_s)
         if failed_since is not None:
             outage_s = self._monotonic() - failed_since
             self._logger.info(events.DB_WRITE_RECOVERED, outage_s=outage_s)
+        if inserted < len(batch):
+            self._logger.warning(
+                events.DB_READINGS_SKIPPED, skipped=len(batch) - inserted, batch_size=len(batch)
+            )

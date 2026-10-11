@@ -182,12 +182,12 @@ uv run dms-acquisition
 docker exec -it dms-dev-pg psql -U postgres -d dms -c "SELECT * FROM dms.meter_reading ORDER BY t DESC LIMIT 5"
 ```
 
-Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and sets `stopped_at` on its row in `dms.run`. The simulator options are `--rate` (frames per second), `--start` and `--step` (a sawtooth of 50 steps) and `--link`.
+Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and sets `stopped_at` on its row in `dms.run`. If the database is unreachable at that moment, the queued readings are dropped after one last attempt (`writer.abandoned`) and `stopped_at` stays empty. The simulator options are `--rate` (frames per second), `--start` and `--step` (a sawtooth of 50 steps) and `--link`.
 
 | Exit code of `dms-acquisition` | Meaning |
 |---|---|
 | 0 | clean shutdown |
-| 1 | startup failed (database unreachable, schema incompatible) or a thread crashed |
+| 1 | startup failed (database unreachable, schema incompatible), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
 | 2 | configuration invalid; all errors are printed |
 
 A meter that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.

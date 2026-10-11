@@ -1,6 +1,7 @@
 import pytest
 
 from dms.acquisition.meters.dgtp import encode_dgtp_frame, parse_dgtp_frame
+from dms.acquisition.meters.parsing import OutOfRange
 
 
 @pytest.mark.parametrize(
@@ -23,13 +24,25 @@ def test_valid_frame_gives_rounded_kilograms(frame: bytes, expected: int) -> Non
 
 
 @pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (b"OL,      66,kg", OutOfRange.OVERLOAD),
+        (b"UL,        ,kg", OutOfRange.UNDERLOAD),
+        (b"OL,--------,kg", OutOfRange.OVERLOAD),
+    ],
+)
+def test_overload_and_underload_are_recognised(frame: bytes, expected: OutOfRange) -> None:
+    assert parse_dgtp_frame(frame) is expected
+
+
+@pytest.mark.parametrize(
     "frame",
     [
         b"",
         b"garbage",
         b"ST,      66,lb",
         b"ST,      66,KG",
-        b"OL,      66,kg",
+        b"OL,      66,lb",
         b"XX,      66,kg",
         b"ST,     66,kg",
         b"ST,       66,kg",

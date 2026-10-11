@@ -6,26 +6,28 @@ from typing import Protocol
 
 import structlog
 
-from dms.acquisition.clock import Clock
+from dms.acquisition.clock import NS_PER_S, Clock
 from dms.acquisition.meters.framing import Framer
+from dms.acquisition.meters.parsing import FrameParser, OutOfRange
 from dms.logs import events
 from dms.messages import EngineMessage, MeterReading
 
-READ_SIZE_BYTES = 256
+FIRST_READ_BYTES = 1
 IDLE_WAIT_S = 0.1
 GARBAGE_LOG_EVERY = 100
 GARBAGE_PREVIEW_BYTES = 64
-NS_PER_S = 1_000_000_000
 
 
 class SerialPort(Protocol):
     def read(self, size: int, /) -> bytes: ...
 
+    @property
+    def in_waiting(self) -> int: ...
+
     def close(self) -> None: ...
 
 
 type PortOpener = Callable[[], SerialPort]
-type FrameParser = Callable[[bytes], int | None]
 
 
 class MeterAdapter:
@@ -64,6 +66,7 @@ class MeterAdapter:
         self._silence_origin_ns = 0
         self._silence_logged = False
         self._rejected_count = 0
+        self._out_of_range: OutOfRange | None = None
 
     def run(self) -> None:
         try:
@@ -113,7 +116,9 @@ class MeterAdapter:
 
     def _read_and_publish(self, port: SerialPort) -> None:
         try:
-            data = port.read(READ_SIZE_BYTES)
+            data = port.read(FIRST_READ_BYTES)
+            if data:
+                data += port.read(port.in_waiting)
         except OSError as error:
             self._logger.warning(events.PORT_DISCONNECTED, error=str(error))
             self._close_port()
@@ -125,23 +130,37 @@ class MeterAdapter:
         mono_ns = self._clock.mono_ns()
         rejected_before = self._framer.rejected_count
         for frame in self._framer.feed(data):
-            value_kg = self._parser(frame)
-            if value_kg is None:
+            parsed = self._parser(frame)
+            if parsed is None:
                 self._note_garbage(frame)
+            elif isinstance(parsed, OutOfRange):
+                self._note_out_of_range(parsed, mono_ns)
             else:
-                self._publish(MeterReading(self._meter_id, value_kg, wall_ns, mono_ns))
+                self._publish(MeterReading(self._meter_id, parsed, wall_ns, mono_ns))
         for _ in range(self._framer.rejected_count - rejected_before):
             self._note_garbage(b"")
 
     def _publish(self, reading: MeterReading) -> None:
+        self._mark_alive(reading.mono_ns)
+        if self._out_of_range is not None:
+            self._logger.info(events.METER_BACK_IN_RANGE, status=self._out_of_range.value)
+            self._out_of_range = None
+        self._out_queue.put(reading)
+
+    def _note_out_of_range(self, status: OutOfRange, mono_ns: int) -> None:
+        self._mark_alive(mono_ns)
+        if status != self._out_of_range:
+            self._logger.warning(events.METER_OUT_OF_RANGE, status=status.value)
+            self._out_of_range = status
+
+    def _mark_alive(self, mono_ns: int) -> None:
         if self._silence_logged:
             self._logger.info(
                 events.PORT_SILENCE_ENDED,
-                duration_s=(reading.mono_ns - self._silence_origin_ns) / NS_PER_S,
+                duration_s=(mono_ns - self._silence_origin_ns) / NS_PER_S,
             )
             self._silence_logged = False
-        self._last_valid_ns = reading.mono_ns
-        self._out_queue.put(reading)
+        self._last_valid_ns = mono_ns
 
     def _note_garbage(self, frame: bytes) -> None:
         self._rejected_count += 1

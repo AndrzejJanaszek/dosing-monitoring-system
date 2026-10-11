@@ -9,6 +9,7 @@ from structlog.testing import capture_logs
 from dms.acquisition.meters.adapter import MeterAdapter, SerialPort
 from dms.acquisition.meters.dgtp import encode_dgtp_frame, parse_dgtp_frame
 from dms.acquisition.meters.framing import Framer
+from dms.acquisition.meters.parsing import OutOfRange
 from dms.logs import events
 from dms.messages import EngineMessage, MeterReading
 from tests.fakes import ManualClock
@@ -20,15 +21,25 @@ SILENCE_TIMEOUT_S = 3.0
 class FakePort:
     def __init__(self, script: list[bytes | Exception]) -> None:
         self._script = script
+        self._pending = b""
+        self.requested_sizes: list[int] = []
         self.closed = False
 
     def read(self, size: int, /) -> bytes:
-        if not self._script:
-            return b""
-        item = self._script.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
+        self.requested_sizes.append(size)
+        if not self._pending:
+            if not self._script:
+                return b""
+            item = self._script.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            self._pending = item
+        data, self._pending = self._pending[:size], self._pending[size:]
+        return data
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._pending)
 
     def feed(self, data: bytes) -> None:
         self._script.append(data)
@@ -103,6 +114,17 @@ def test_valid_frame_becomes_reading_with_clock_stamps(
     (reading,) = harness.readings()
     assert reading == MeterReading("m1", 1020, harness.clock.wall_ns(), harness.clock.mono_ns())
     assert event_names(logs) == [events.PORT_OPENED]
+
+
+def test_adapter_reads_only_bytes_that_already_arrived() -> None:
+    port = FakePort([encode_dgtp_frame(10)])
+    harness = Harness([port])
+
+    harness.steps(2)
+
+    frame_length = len(encode_dgtp_frame(10))
+    assert port.requested_sizes == [1, frame_length - 1]
+    assert [reading.value_kg for reading in harness.readings()] == [10]
 
 
 def test_frames_split_across_reads_are_assembled() -> None:
@@ -258,3 +280,32 @@ def test_run_stops_and_closes_port_when_stop_event_is_set() -> None:
     stop.set()
     adapter.run()
     assert port.closed
+
+
+def test_overload_keeps_port_alive_and_is_logged_on_change(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    overload = b"OL,        ,kg\r\n"
+    underload = b"UL,        ,kg\r\n"
+    port = FakePort([])
+    harness = Harness([port])
+    harness.steps(1)
+
+    for frame in [overload, overload, underload, encode_dgtp_frame(40)]:
+        harness.clock.advance(SILENCE_TIMEOUT_S - 1)
+        port.feed(frame)
+        harness.steps(1)
+
+    assert not port.closed
+    assert [reading.value_kg for reading in harness.readings()] == [40]
+    out_of_range_logs = [
+        (entry["event"], entry["status"])
+        for entry in logs
+        if entry["event"] in {events.METER_OUT_OF_RANGE, events.METER_BACK_IN_RANGE}
+    ]
+    assert out_of_range_logs == [
+        (events.METER_OUT_OF_RANGE, OutOfRange.OVERLOAD.value),
+        (events.METER_OUT_OF_RANGE, OutOfRange.UNDERLOAD.value),
+        (events.METER_BACK_IN_RANGE, OutOfRange.UNDERLOAD.value),
+    ]
+    assert events.PORT_GARBAGE not in event_names(logs)

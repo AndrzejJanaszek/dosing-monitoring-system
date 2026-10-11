@@ -12,12 +12,10 @@ SECOND_NS = 1_000_000_000
 def build() -> tuple[Engine, queue.Queue[EngineMessage], queue.Queue[MeterRecord]]:
     in_queue: queue.Queue[EngineMessage] = queue.Queue()
     out_queue: queue.Queue[MeterRecord] = queue.Queue()
-    first, second = Silo(1, SECOND_NS), Silo(2, SECOND_NS)
     engine = Engine(
         in_queue=in_queue,
         out_queue=out_queue,
-        silos_by_meter={"m1": first, "m2": second},
-        silos=[first, second],
+        silos_by_meter={"m1": Silo(1, SECOND_NS), "m2": Silo(2, SECOND_NS)},
         stop_event=threading.Event(),
     )
     return engine, in_queue, out_queue
@@ -69,7 +67,6 @@ def test_run_drains_the_queue_after_stop() -> None:
         in_queue=in_queue,
         out_queue=out_queue,
         silos_by_meter={"m1": Silo(1, SECOND_NS)},
-        silos=[],
         stop_event=stop_event,
     )
     in_queue.put(MeterReading("m1", 1, 0, 0))

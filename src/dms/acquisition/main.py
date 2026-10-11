@@ -75,5 +75,7 @@ def main() -> int:
         app.stop()
     finally:
         threading.excepthook = previous_hook
+    if app.failed:
+        return EXIT_FAILURE
     logger.info(events.SERVICE_STOPPED, run_id=run_id)
-    return EXIT_FAILURE if app.failed else EXIT_OK
+    return EXIT_OK

@@ -14,7 +14,7 @@ class Silo:
         self._cache.add(reading)
 
     def on_tick(self, tick: Tick) -> MeterRecord | None:
-        reading = self._cache.at_or_before(tick.mono_ns)
+        reading = self._cache.advance_to(tick.mono_ns)
         if reading is None:
             return None
         if tick.mono_ns - reading.mono_ns > self._max_reading_age_ns:
