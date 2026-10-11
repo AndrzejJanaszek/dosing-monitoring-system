@@ -163,4 +163,31 @@ On the development database (see [Development database](#development-database)):
 PGPASSWORD=dms DMS_CONFIG_DIR=config/example uv run dms-migrate
 ```
 
-`config/example/` appears with the acquisition stage; until then point `DMS_CONFIG_DIR` at a directory with a `shared.toml` (`host = "localhost"`).
+
+## Running acquisition locally
+
+The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. Without hardware, the simulator provides a pseudo-terminal that behaves like a Dini Argeo DGTP meter.
+
+```bash
+scripts/db-reset.sh
+export PGPASSWORD=dms DMS_CONFIG_DIR=config/example
+uv run dms-migrate
+uv run dms-simulator meter --link /tmp/dms-meter &
+uv run dms-acquisition
+```
+
+`config/example/` points at the development database and at `/tmp/dms-meter`. In a second terminal:
+
+```bash
+docker exec -it dms-dev-pg psql -U postgres -d dms -c "SELECT * FROM dms.meter_reading ORDER BY t DESC LIMIT 5"
+```
+
+Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and sets `stopped_at` on its row in `dms.run`. The simulator options are `--rate` (frames per second), `--start` and `--step` (a sawtooth of 50 steps) and `--link`.
+
+| Exit code of `dms-acquisition` | Meaning |
+|---|---|
+| 0 | clean shutdown |
+| 1 | startup failed (database unreachable, schema incompatible) or a thread crashed |
+| 2 | configuration invalid; all errors are printed |
+
+A meter that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.

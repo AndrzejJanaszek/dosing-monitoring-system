@@ -20,7 +20,7 @@ from dms.persistence.schema import (
     load_migrations,
     package_schema_version,
 )
-from tests.integration.conftest import migrate_as_owner
+from tests.database import migrate_as_owner
 
 
 def owner_connection(database_url: str) -> psycopg.Connection[TupleRow]:

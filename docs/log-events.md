@@ -4,14 +4,14 @@ Every log line has an `event` name from this catalogue. The names are constants 
 
 | event | level | fields | meaning | action |
 |---|---|---|---|---|
-| `service.started` | INFO | `run_id`, `version` | The service finished startup and is collecting data. | none |
+| `service.started` | INFO | `run_id` | The service finished startup and is collecting data. | none |
 | `service.stopped` | INFO | `run_id` | The service shut down cleanly. | none |
 | `config.invalid` | CRITICAL | `errors` | A configuration file is missing or invalid; the process exits with code 2. | fix the files named in `errors` |
 | `db.connect_retry` | WARNING | `role`, `attempt`, `error` | The database does not accept the connection yet; the process retries. | check that PostgreSQL is running |
 | `db.connected` | INFO | `role`, `dbname` | The database connection was established. | none |
 | `db.schema_incompatible` | CRITICAL | `database_version`, `package_version` | The database schema does not match the installed package; startup is refused. | run `dms-migrate` or install the matching package |
 | `db.startup_failed` | CRITICAL | `step`, `error` | A startup step against the database failed; startup is refused. | read `error`, fix and restart |
-| `db.write_error` | WARNING | `error`, `batch_size` | Writing a batch failed with a transient error; the writer reconnects and retries. | check the database if it does not recover |
+| `db.write_error` | WARNING | `error`, `batch_size` or `context` | Writing a batch failed with a transient error; the writer reconnects and retries. | check the database if it does not recover |
 | `db.write_recovered` | INFO | `outage_s` | Writing resumed after a transient error. | none |
 | `writer.fatal` | CRITICAL | `error` | The writer hit an error it cannot recover from; the process exits. | read `error`, fix the cause (for example a full disk) |
 | `engine.fatal` | CRITICAL | `error` | The engine hit an unexpected error; the process exits. | report the traceback |

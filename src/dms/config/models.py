@@ -1,8 +1,16 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from dms.logs.setup import LogFormat, LogLevel
 
 MAX_SMALLINT = 32767
+MIN_PORT = 1
+MAX_PORT = 65535
+DEFAULT_DATABASE_PORT = 5432
+DEFAULT_TICK_INTERVAL_S = 1.0
+DEFAULT_MAX_READING_AGE_S = 1.0
+NON_EMPTY = 1
 
 
 class FrozenModel(BaseModel):
@@ -11,8 +19,8 @@ class FrozenModel(BaseModel):
 
 class DatabaseConfig(FrozenModel):
     host: str = "/var/run/postgresql"
-    port: int = Field(default=5432, ge=1, le=65535)
-    dbname: str = Field(default="dms", min_length=1)
+    port: int = Field(default=DEFAULT_DATABASE_PORT, ge=MIN_PORT, le=MAX_PORT)
+    dbname: str = Field(default="dms", min_length=NON_EMPTY)
 
 
 class LoggingConfig(FrozenModel):
@@ -26,25 +34,25 @@ class SharedConfig(FrozenModel):
 
 
 class EngineConfig(FrozenModel):
-    tick_interval_s: float = Field(default=1.0, gt=0)
-    max_reading_age_s: float = Field(default=1.0, gt=0)
+    tick_interval_s: float = Field(default=DEFAULT_TICK_INTERVAL_S, gt=0)
+    max_reading_age_s: float = Field(default=DEFAULT_MAX_READING_AGE_S, gt=0)
 
 
 class MeterConfig(FrozenModel):
-    id: str = Field(min_length=1)
-    port: str = Field(min_length=1)
+    id: str = Field(min_length=NON_EMPTY)
+    port: str = Field(min_length=NON_EMPTY)
     baudrate: int = Field(gt=0)
-    format: str
+    format: Literal["dgtp"]
     frame_start: str = ""
-    frame_end: str = Field(min_length=1)
+    frame_end: str = Field(min_length=NON_EMPTY)
     reconnect_delay_s: float = Field(gt=0)
     silence_timeout_s: float = Field(gt=0)
 
 
 class SiloConfig(FrozenModel):
-    id: int = Field(ge=1, le=MAX_SMALLINT)
-    name: str = Field(min_length=1)
-    meter: str = Field(min_length=1)
+    id: int = Field(ge=NON_EMPTY, le=MAX_SMALLINT)
+    name: str = Field(min_length=NON_EMPTY)
+    meter: str = Field(min_length=NON_EMPTY)
 
 
 class AcquisitionConfig(FrozenModel):

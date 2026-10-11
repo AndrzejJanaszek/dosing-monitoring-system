@@ -16,7 +16,7 @@ from dms.logs import events
 from dms.persistence.catalog import start_run, stop_run, sync_silos
 from dms.persistence.connection import StartupError, connect_with_retry
 from dms.persistence.writer import PostgresRecordStore, Writer, timestamp_from_ns
-from tests.integration.conftest import connect_as, migrate_as_owner
+from tests.database import connect_as, migrate_as_owner
 
 WRITER_ROLE = "dms_writer"
 BASE_NS = 1_700_000_000_123_456_000
@@ -177,7 +177,7 @@ def test_writer_survives_terminated_connection(
         store=store,
         stop_event=threading.Event(),
         retry_delay_s=0,
-        wait=lambda _seconds: False,
+        sleep=lambda _seconds: None,
     )
     in_queue.put(MeterRecord(1, BASE_NS, 100))
     writer.step()

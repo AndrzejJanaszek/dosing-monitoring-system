@@ -1,0 +1,18 @@
+[engine]
+tick_interval_s = 1.0
+max_reading_age_s = 1.0
+
+[[meters]]
+id = "m1"
+port = "/tmp/dms-meter"
+baudrate = 9600
+format = "dgtp"
+frame_start = ""
+frame_end = "\r\n"
+reconnect_delay_s = 5.0
+silence_timeout_s = 5.0
+
+[[silos]]
+id = 1
+name = "Silos 1"
+meter = "m1"

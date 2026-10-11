@@ -1,7 +1,6 @@
 import io
 import json
 import logging
-from collections.abc import Iterator
 
 import pytest
 import structlog
@@ -12,16 +11,6 @@ from dms.logs.setup import LogFormat, configure_logging
 class TerminalStream(io.StringIO):
     def isatty(self) -> bool:
         return True
-
-
-@pytest.fixture(autouse=True)
-def restore_logging() -> Iterator[None]:
-    root = logging.getLogger()
-    handlers, level = list(root.handlers), root.level
-    yield
-    root.handlers[:] = handlers
-    root.setLevel(level)
-    structlog.reset_defaults()
 
 
 @pytest.mark.parametrize("log_format", ["json", "auto"])

@@ -53,6 +53,10 @@ class PostgresRecordStore:
         self._connection = connection
         self._connect = connect
 
+    @property
+    def connection(self) -> psycopg.Connection[TupleRow]:
+        return self._connection
+
     def write(self, records: Sequence[MeterRecord]) -> None:
         rows = [
             (record.silo_id, timestamp_from_ns(record.wall_ns), record.value_kg)
@@ -87,7 +91,7 @@ class Writer:
         monotonic: Callable[[], float] = time.monotonic,
         max_batch: int = MAX_BATCH,
         retry_delay_s: float = RETRY_DELAY_S,
-        wait: Callable[[float], bool] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._in_queue = in_queue
         self._store = store
@@ -95,7 +99,7 @@ class Writer:
         self._monotonic = monotonic
         self._max_batch = max_batch
         self._retry_delay_s = retry_delay_s
-        self._wait = wait if wait is not None else stop_event.wait
+        self._sleep = sleep
         self._logger = structlog.get_logger()
 
     def run(self) -> None:
@@ -148,7 +152,7 @@ class Writer:
                         events.DB_WRITE_ERROR, error=str(error), batch_size=len(batch)
                     )
                 needs_reconnect = True
-                self._wait(self._retry_delay_s)
+                self._sleep(self._retry_delay_s)
         if failed_since is not None:
             outage_s = self._monotonic() - failed_since
             self._logger.info(events.DB_WRITE_RECOVERED, outage_s=outage_s)

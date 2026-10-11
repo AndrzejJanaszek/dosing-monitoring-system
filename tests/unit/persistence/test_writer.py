@@ -42,7 +42,7 @@ def build(
         stop_event=stop_event,
         max_batch=max_batch,
         retry_delay_s=0,
-        wait=lambda _seconds: False,
+        sleep=lambda _seconds: None,
         monotonic=lambda: float(next(clock_values)),
     )
     return writer, in_queue, stop_event
