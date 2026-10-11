@@ -12,6 +12,7 @@ forbidden_modules =
     dms.ipc
     dms.api
     dms.config
+    dms.logs
 
 [importlinter:contract:processes-independent]
 name = API and acquisition do not import each other

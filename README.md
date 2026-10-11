@@ -146,3 +146,9 @@ DMS_TEST_PG_URL=postgresql://postgres:postgres@localhost:5432/postgres make test
 ```
 
 The tests then use that server instead of a container. They still work in their own `dms_test_*` database, so the development database `dms` is left untouched; roles are created there if missing.
+
+## Configuration and logging
+
+Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
+
+Logs are structured (structlog). `format = "auto"` prints a human-readable console format on a terminal and JSON otherwise; standard library logs go through the same renderer. Event names are listed in [docs/log-events.md](docs/log-events.md).

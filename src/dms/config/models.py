@@ -1,0 +1,84 @@
+from pydantic import BaseModel, ConfigDict, Field
+
+from dms.logs.setup import LogFormat, LogLevel
+
+MAX_SMALLINT = 32767
+
+
+class FrozenModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class DatabaseConfig(FrozenModel):
+    host: str = "/var/run/postgresql"
+    port: int = Field(default=5432, ge=1, le=65535)
+    dbname: str = Field(default="dms", min_length=1)
+
+
+class LoggingConfig(FrozenModel):
+    level: LogLevel = "INFO"
+    format: LogFormat = "auto"
+
+
+class SharedConfig(FrozenModel):
+    database: DatabaseConfig = DatabaseConfig()
+    logging: LoggingConfig = LoggingConfig()
+
+
+class EngineConfig(FrozenModel):
+    tick_interval_s: float = Field(default=1.0, gt=0)
+    max_reading_age_s: float = Field(default=1.0, gt=0)
+
+
+class MeterConfig(FrozenModel):
+    id: str = Field(min_length=1)
+    port: str = Field(min_length=1)
+    baudrate: int = Field(gt=0)
+    format: str
+    frame_start: str = ""
+    frame_end: str = Field(min_length=1)
+    reconnect_delay_s: float = Field(gt=0)
+    silence_timeout_s: float = Field(gt=0)
+
+
+class SiloConfig(FrozenModel):
+    id: int = Field(ge=1, le=MAX_SMALLINT)
+    name: str = Field(min_length=1)
+    meter: str = Field(min_length=1)
+
+
+class AcquisitionConfig(FrozenModel):
+    engine: EngineConfig = EngineConfig()
+    meters: tuple[MeterConfig, ...]
+    silos: tuple[SiloConfig, ...]
+
+
+def validate_acquisition_rules(config: AcquisitionConfig) -> list[str]:
+    errors: list[str] = []
+    errors.extend(_duplicates("meters", "id", [meter.id for meter in config.meters]))
+    errors.extend(_duplicates("meters", "port", [meter.port for meter in config.meters]))
+    errors.extend(_duplicates("silos", "id", [silo.id for silo in config.silos]))
+
+    meter_ids = {meter.id for meter in config.meters}
+    silo_by_meter: dict[str, int] = {}
+    for index, silo in enumerate(config.silos):
+        if silo.meter not in meter_ids:
+            errors.append(f"silos[{index}].meter: unknown meter '{silo.meter}'")
+        elif silo.meter in silo_by_meter:
+            errors.append(
+                f"silos[{index}].meter: meter '{silo.meter}' is already assigned"
+                f" to silo {silo_by_meter[silo.meter]}"
+            )
+        else:
+            silo_by_meter[silo.meter] = silo.id
+    return errors
+
+
+def _duplicates[T](collection: str, field: str, values: list[T]) -> list[str]:
+    first_seen: set[T] = set()
+    errors: list[str] = []
+    for index, value in enumerate(values):
+        if value in first_seen:
+            errors.append(f"{collection}[{index}].{field}: duplicate {field} '{value}'")
+        first_seen.add(value)
+    return errors
