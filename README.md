@@ -15,6 +15,8 @@ make check
 
 `make check` runs, in order: formatting check (ruff), lint (ruff), type check (mypy, strict), import contracts (import-linter, `.importlinter`) and tests (pytest). Run `make check`, not just `pytest`, before opening a pull request; import contracts are not part of the test suite.
 
+CI (GitHub Actions, `.github/workflows/ci.yml`) runs `make check` on every pull request and on every push to `main`. Merging into `main` requires a green CI run.
+
 | Target | Runs |
 |---|---|
 | `make format` | `ruff format` and `ruff check --fix` |
