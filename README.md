@@ -2,6 +2,31 @@
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, commit and pull request convention.
 
+`legacy/` holds the previous prototype (backend, frontend, sandbox and early project notes). It is kept as reference only and is excluded from linting, type checking, tests and import contracts. New code lives in `src/dms/`.
+
+## Python and tooling
+
+Python 3.14, the system interpreter of Ubuntu 26.04. Release 1.0 is installed natively on an offline machine, so building on the system Python avoids shipping a separate interpreter. `requires-python` has an upper bound on purpose: moving to 3.15 is a deliberate change.
+
+```bash
+uv sync
+make check
+```
+
+`make check` runs, in order: formatting check (ruff), lint (ruff), type check (mypy, strict), import contracts (import-linter, `.importlinter`) and tests (pytest). Run `make check`, not just `pytest`, before opening a pull request; import contracts are not part of the test suite.
+
+| Target | Runs |
+|---|---|
+| `make format` | `ruff format` and `ruff check --fix` |
+| `make lint` | `ruff check` |
+| `make typecheck` | `mypy` |
+| `make imports` | `lint-imports` |
+| `make test` | all tests |
+| `make test-unit`, `make test-integration`, `make test-e2e` | tests of one level |
+| `make coverage` | tests with a coverage report |
+
+Pass extra pytest arguments through `ARGS`, e.g. `make test-unit ARGS='-k parser'`. Tests get their level marker (`unit`, `integration`, `e2e`) from their directory under `tests/`.
+
 ## Development environment
 
 Target system: Ubuntu 26.04 (the same as the production thin client). PostgreSQL is not installed locally; tests run it in containers (testcontainers).
