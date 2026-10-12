@@ -12,6 +12,8 @@ forbidden_modules =
     dms.ipc
     dms.api
     dms.config
+    dms.logs
+    dms.simulator
 
 [importlinter:contract:processes-independent]
 name = API and acquisition do not import each other
@@ -28,3 +30,18 @@ source_modules =
 forbidden_modules =
     dms.api
     dms.acquisition
+
+[importlinter:contract:simulator-is-standalone]
+name = Nothing imports the simulator
+type = forbidden
+source_modules =
+    dms.acquisition
+    dms.persistence
+    dms.config
+    dms.domain
+    dms.api
+    dms.ipc
+    dms.logs
+    dms.messages
+forbidden_modules =
+    dms.simulator
