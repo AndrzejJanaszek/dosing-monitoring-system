@@ -69,3 +69,29 @@ def test_tick_uses_the_latest_reading_when_several_arrived() -> None:
 
     assert record is not None
     assert record.value_kg == 102
+
+
+def test_silo_is_not_stale_before_any_reading() -> None:
+    silo = Silo(1, MAX_AGE_NS)
+    silo.on_tick(tick(1))
+
+    assert silo.stale_since_mono_ns is None
+
+
+def test_stale_since_is_when_the_last_reading_crossed_the_age_limit() -> None:
+    silo = Silo(1, MAX_AGE_NS)
+    silo.on_reading(reading(10.0, 500))
+    silo.on_tick(tick(11.5))
+    silo.on_tick(tick(12.5))
+
+    assert silo.stale_since_mono_ns == 11 * SECOND_NS
+
+
+def test_fresh_reading_clears_stale_state() -> None:
+    silo = Silo(1, MAX_AGE_NS)
+    silo.on_reading(reading(10.0, 500))
+    silo.on_tick(tick(11.5))
+    silo.on_reading(reading(12.0, 510))
+    silo.on_tick(tick(12.2))
+
+    assert silo.stale_since_mono_ns is None

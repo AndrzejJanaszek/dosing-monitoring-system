@@ -7,6 +7,7 @@ from dms.persistence.schema import (
     INITIAL_VERSION,
     MigrationFilesError,
     SchemaVersion,
+    SchemaVersionFormatError,
     is_compatible,
     load_migrations,
     package_schema_version,
@@ -123,3 +124,9 @@ def test_compatibility_rule(database: str, package: str, compatible: bool) -> No
 
 def test_version_text_round_trip() -> None:
     assert str(SchemaVersion.parse("3.14.15")) == "3.14.15"
+
+
+@pytest.mark.parametrize("text", ["0.0.0.1", "1.0", "1.x.0", "", " 1.0.0"])
+def test_malformed_version_text_is_a_readable_error(text: str) -> None:
+    with pytest.raises(SchemaVersionFormatError, match=r"MAJOR\.MINOR\.PATCH"):
+        SchemaVersion.parse(text)

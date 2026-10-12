@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 import structlog
 
+from dms.acquisition.clock import NS_PER_S
 from dms.domain.records import MeterRecord
 from dms.domain.silo import Silo
 from dms.logs import events
@@ -57,6 +58,21 @@ class Engine:
                 silo.on_reading(message)
         elif isinstance(message, Tick):
             for silo in self._silos_by_meter.values():
+                stale_since_before_ns = silo.stale_since_mono_ns
                 record = silo.on_tick(message)
+                self._log_freshness_change(silo, stale_since_before_ns, message.mono_ns)
                 if record is not None:
                     self._out_queue.put(record)
+
+    def _log_freshness_change(
+        self, silo: Silo, stale_since_before_ns: int | None, tick_mono_ns: int
+    ) -> None:
+        stale_since_now_ns = silo.stale_since_mono_ns
+        if stale_since_before_ns is None and stale_since_now_ns is not None:
+            structlog.get_logger().warning(events.SILO_READING_STALE, silo_id=silo.silo_id)
+        elif stale_since_before_ns is not None and stale_since_now_ns is None:
+            structlog.get_logger().info(
+                events.SILO_READING_STALE_ENDED,
+                silo_id=silo.silo_id,
+                duration_s=(tick_mono_ns - stale_since_before_ns) / NS_PER_S,
+            )

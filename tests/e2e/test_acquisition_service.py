@@ -66,7 +66,7 @@ silence_timeout_s = 5.0
 [[silos]]
 id = 1
 name = "Silos 1"
-meter = "m1"
+meter_id = "m1"
 """,
         encoding="utf-8",
     )

@@ -9,6 +9,11 @@ class Silo:
         self._max_reading_age_ns = max_reading_age_ns
         self._cache = ReadingCache()
         self._last_emitted_mono_ns: int | None = None
+        self._stale_since_mono_ns: int | None = None
+
+    @property
+    def stale_since_mono_ns(self) -> int | None:
+        return self._stale_since_mono_ns
 
     def on_reading(self, reading: MeterReading) -> None:
         self._cache.add(reading)
@@ -18,7 +23,10 @@ class Silo:
         if reading is None:
             return None
         if tick.mono_ns - reading.mono_ns > self._max_reading_age_ns:
+            if self._stale_since_mono_ns is None:
+                self._stale_since_mono_ns = reading.mono_ns + self._max_reading_age_ns
             return None
+        self._stale_since_mono_ns = None
         if reading.mono_ns == self._last_emitted_mono_ns:
             return None
         self._last_emitted_mono_ns = reading.mono_ns

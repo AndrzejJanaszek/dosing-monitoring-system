@@ -23,13 +23,13 @@ BASE_NS = 1_700_000_000_123_456_000
 
 
 def silo(silo_id: int, name: str = "Silos") -> SiloConfig:
-    return SiloConfig(id=silo_id, name=f"{name} {silo_id}", meter=f"m{silo_id}")
+    return SiloConfig(id=silo_id, name=f"{name} {silo_id}", meter_id=f"m{silo_id}")
 
 
 def acquisition_config(silos: list[SiloConfig]) -> AcquisitionConfig:
     meters = tuple(
         MeterConfig(
-            id=item.meter,
+            id=item.meter_id,
             port=f"/dev/fake{item.id}",
             baudrate=9600,
             format="dgtp",

@@ -118,16 +118,18 @@ def _check_applied_migrations(
 
 def main() -> int:
     try:
-        shared = load_shared()
+        shared_config = load_shared()
     except ConfigError as error:
         for line in error.errors:
             print(line, file=sys.stderr)
         return EXIT_CONFIG_ERROR
-    configure_logging(shared.logging.level, shared.logging.format)
+    configure_logging(shared_config.logging.level, shared_config.logging.format)
     logger = structlog.get_logger()
     try:
         migrations = load_migrations()
-        with psycopg.connect(build_conninfo(shared.database, OWNER_ROLE), autocommit=True) as conn:
+        with psycopg.connect(
+            build_conninfo(shared_config.database, OWNER_ROLE), autocommit=True
+        ) as conn:
             apply_migrations(conn, migrations)
     except MigrationFilesError as error:
         logger.critical(events.DB_STARTUP_FAILED, step="load_migrations", error=str(error))

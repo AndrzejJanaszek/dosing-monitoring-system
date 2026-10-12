@@ -10,4 +10,6 @@ def test_example_configuration_is_valid() -> None:
     acquisition = load_acquisition(EXAMPLE_DIR)
 
     assert shared.database.dbname == "dms"
-    assert [silo.meter for silo in acquisition.silos] == [meter.id for meter in acquisition.meters]
+    assert [silo.meter_id for silo in acquisition.silos] == [
+        meter.id for meter in acquisition.meters
+    ]

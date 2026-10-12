@@ -35,30 +35,30 @@ def _crash_hook(app: AcquisitionApp, arguments: threading.ExceptHookArgs) -> Non
 
 def main() -> int:
     try:
-        shared = load_shared()
-        acquisition = load_acquisition()
+        shared_config = load_shared()
+        acquisition_config = load_acquisition()
     except ConfigError as error:
         configure_logging("INFO", "auto")
         structlog.get_logger().critical(events.CONFIG_INVALID, errors=error.errors)
         for line in error.errors:
             print(line, file=sys.stderr)
         return EXIT_CONFIG_ERROR
-    configure_logging(shared.logging.level, shared.logging.format)
+    configure_logging(shared_config.logging.level, shared_config.logging.format)
     logger = structlog.get_logger()
 
-    conninfo = build_conninfo(shared.database, WRITER_ROLE)
+    conninfo = build_conninfo(shared_config.database, WRITER_ROLE)
     try:
         connection = connect_with_retry(conninfo)
     except StartupError as error:
         logger.critical(events.DB_STARTUP_FAILED, step="connect", error=str(error))
         return EXIT_FAILURE
     try:
-        run_id = run_startup_sequence(connection, acquisition)
+        run_id = run_startup_sequence(connection, acquisition_config)
     except StartupError:
         return EXIT_FAILURE
 
     app = build_acquisition(
-        config=acquisition,
+        config=acquisition_config,
         clock=SystemClock(),
         connection=connection,
         reconnect=lambda: psycopg.connect(conninfo, autocommit=True),

@@ -1,7 +1,8 @@
 import queue
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from functools import partial
 
 import psycopg
 import serial
@@ -10,11 +11,12 @@ from psycopg.rows import TupleRow
 
 from dms.acquisition.clock import NS_PER_S, Clock
 from dms.acquisition.engine import Engine
-from dms.acquisition.meters.adapter import MeterAdapter, SerialPort
+from dms.acquisition.meters.adapter import MeterAdapter
 from dms.acquisition.meters.dgtp import parse_dgtp_frame
 from dms.acquisition.meters.framing import Framer
+from dms.acquisition.meters.parsing import FrameParser
 from dms.acquisition.ticker import TickTimer
-from dms.config.models import AcquisitionConfig, MeterConfig
+from dms.config.models import AcquisitionConfig, MeterFormat
 from dms.domain.records import MeterRecord
 from dms.domain.silo import Silo
 from dms.logs import events
@@ -25,14 +27,7 @@ from dms.persistence.writer import PostgresRecordStore, Writer
 PORT_READ_TIMEOUT_S = 0.1
 SHUTDOWN_JOIN_TIMEOUT_S = 10.0
 SHUTDOWN_POLL_S = 0.2
-FRAME_PARSERS = {"dgtp": parse_dgtp_frame}
-
-
-def serial_port_opener(meter: MeterConfig) -> Callable[[], SerialPort]:
-    def open_port() -> SerialPort:
-        return serial.Serial(meter.port, meter.baudrate, timeout=PORT_READ_TIMEOUT_S)
-
-    return open_port
+FRAME_PARSERS: Mapping[MeterFormat, FrameParser] = {"dgtp": parse_dgtp_frame}
 
 
 class AcquisitionApp:
@@ -126,7 +121,7 @@ def build_acquisition(
     run_id: int,
 ) -> AcquisitionApp:
     max_reading_age_ns = round(config.engine.max_reading_age_s * NS_PER_S)
-    silos_by_meter = {silo.meter: Silo(silo.id, max_reading_age_ns) for silo in config.silos}
+    silos_by_meter = {silo.meter_id: Silo(silo.id, max_reading_age_ns) for silo in config.silos}
     engine_queue: queue.Queue[EngineMessage] = queue.Queue()
     record_queue: queue.Queue[MeterRecord] = queue.Queue()
     producers_stop = threading.Event()
@@ -136,7 +131,9 @@ def build_acquisition(
         MeterAdapter(
             meter_id=meter.id,
             port_name=meter.port,
-            port_opener=serial_port_opener(meter),
+            port_opener=partial(
+                serial.Serial, meter.port, meter.baudrate, timeout=PORT_READ_TIMEOUT_S
+            ),
             framer=Framer(meter.frame_start.encode(), meter.frame_end.encode()),
             parser=FRAME_PARSERS[meter.format],
             clock=clock,

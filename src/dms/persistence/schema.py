@@ -15,7 +15,12 @@ SCHEMA_NAME = "dms"
 MIGRATION_TABLE = "schema_migration"
 MIGRATION_FILE_PATTERN = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 CHANGE_HEADER_PATTERN = re.compile(r"^-- schema-change: (major|minor|patch)$")
+SCHEMA_VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 FIRST_MIGRATION_VERSION = 1
+
+
+class SchemaVersionFormatError(Exception):
+    pass
 
 
 class SchemaVersion(NamedTuple):
@@ -28,7 +33,12 @@ class SchemaVersion(NamedTuple):
 
     @classmethod
     def parse(cls, text: str) -> SchemaVersion:
-        major, minor, patch = (int(part) for part in text.split("."))
+        match = SCHEMA_VERSION_PATTERN.match(text)
+        if match is None:
+            raise SchemaVersionFormatError(
+                f"schema version '{text}' must look like MAJOR.MINOR.PATCH"
+            )
+        major, minor, patch = (int(part) for part in match.groups())
         return cls(major, minor, patch)
 
     def bumped(self, change: ChangeKind) -> SchemaVersion:

@@ -1,9 +1,12 @@
 import queue
 import threading
 
+from structlog.testing import capture_logs
+
 from dms.acquisition.engine import Engine
 from dms.domain.records import MeterRecord
 from dms.domain.silo import Silo
+from dms.logs import events
 from dms.messages import EngineMessage, MeterReading, Tick
 
 SECOND_NS = 1_000_000_000
@@ -75,3 +78,22 @@ def test_run_drains_the_queue_after_stop() -> None:
     engine.run()
 
     assert in_queue.empty()
+
+
+def test_stale_and_recovered_reading_are_logged_once_each() -> None:
+    engine, in_queue, _ = build()
+    in_queue.put(MeterReading("m1", 100, 0, 10 * SECOND_NS))
+    for tick_s in (12, 13, 14):
+        in_queue.put(Tick(0, tick_s * SECOND_NS))
+    in_queue.put(MeterReading("m1", 110, 0, 15 * SECOND_NS))
+    in_queue.put(Tick(0, 15 * SECOND_NS))
+
+    with capture_logs() as logs:
+        for _ in range(6):
+            engine.step()
+
+    assert [(entry["event"], entry["silo_id"]) for entry in logs] == [
+        (events.SILO_READING_STALE, 1),
+        (events.SILO_READING_STALE_ENDED, 1),
+    ]
+    assert logs[1]["duration_s"] == 4.0

@@ -11,6 +11,7 @@ from dms.persistence.connection import StartupError
 from dms.persistence.schema import (
     MigrationFilesError,
     SchemaIncompatibleError,
+    SchemaVersionFormatError,
     check_schema_compatible,
 )
 
@@ -30,7 +31,7 @@ def run_startup_sequence(
             package_version=str(error.package_version),
         )
         raise StartupError(str(error)) from error
-    except (psycopg.Error, MigrationFilesError) as error:
+    except (psycopg.Error, MigrationFilesError, SchemaVersionFormatError) as error:
         logger.critical(events.DB_STARTUP_FAILED, step="check_schema", error=str(error))
         raise StartupError(str(error)) from error
     try:

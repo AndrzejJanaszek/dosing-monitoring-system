@@ -2,7 +2,7 @@ import contextlib
 import queue
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -50,6 +50,16 @@ def _is_transient(error: psycopg.Error) -> bool:
     return isinstance(error, psycopg.OperationalError) and not isinstance(error, errors.DiskFull)
 
 
+@contextlib.contextmanager
+def _transient_errors_translated() -> Iterator[None]:
+    try:
+        yield
+    except psycopg.Error as error:
+        if _is_transient(error):
+            raise TransientStoreError(str(error)) from error
+        raise
+
+
 class PostgresRecordStore:
     def __init__(
         self,
@@ -68,24 +78,19 @@ class PostgresRecordStore:
             (record.silo_id, timestamp_from_ns(record.wall_ns), record.value_kg)
             for record in records
         ]
-        try:
-            with self._connection.transaction(), self._connection.cursor() as cursor:
-                cursor.executemany(INSERT_METER_READING_SQL, rows)
-                return cursor.rowcount
-        except psycopg.Error as error:
-            if _is_transient(error):
-                raise TransientStoreError(str(error)) from error
-            raise
+        with (
+            _transient_errors_translated(),
+            self._connection.transaction(),
+            self._connection.cursor() as cursor,
+        ):
+            cursor.executemany(INSERT_METER_READING_SQL, rows)
+            return cursor.rowcount
 
     def reconnect(self) -> None:
         with contextlib.suppress(psycopg.Error):
             self._connection.close()
-        try:
+        with _transient_errors_translated():
             self._connection = self._connect()
-        except psycopg.Error as error:
-            if _is_transient(error):
-                raise TransientStoreError(str(error)) from error
-            raise
 
 
 class Writer:

@@ -27,6 +27,8 @@ Every log line has an `event` name from this catalogue. The names are constants 
 | `port.garbage` | WARNING | `meter_id`, `rejected_count` | Frames that do not parse arrive; logged for the first one and then every 100th. | check baud rate and output format of the meter |
 | `meter.out_of_range` | WARNING | `meter_id`, `port`, `status` | The meter reports overload (`OL`) or underload (`UL`); no reading is published, the port counts as alive. Logged when the state starts or changes. | check the load cell and the silo |
 | `meter.back_in_range` | INFO | `meter_id`, `port`, `status` | The meter sends weights again after an overload or underload. | none |
+| `silo.reading_stale` | WARNING | `silo_id` | The latest reading of the silo's meter is older than `max_reading_age_s`; the engine creates no records for this silo until a fresh reading arrives. | check the meter's port events (`port.*`) |
+| `silo.reading_stale_ended` | INFO | `silo_id`, `duration_s` | A fresh reading arrived after a stale period; `duration_s` counts from the moment the last reading became stale. | none |
 | `migrate.applied` | INFO | `migration`, `schema_version` | One migration file was applied. | none |
 | `migrate.done` | INFO | `schema_version`, `applied_count` | All migrations are applied. | none |
 | `migrate.checksum_mismatch` | CRITICAL | `files` | An applied migration file was changed; the database is untouched. | restore the files; never edit an applied migration |

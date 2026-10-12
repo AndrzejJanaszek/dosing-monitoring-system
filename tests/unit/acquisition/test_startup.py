@@ -9,7 +9,7 @@ from dms.acquisition import startup
 from dms.config.models import AcquisitionConfig
 from dms.logs import events
 from dms.persistence.connection import StartupError
-from dms.persistence.schema import MigrationFilesError
+from dms.persistence.schema import MigrationFilesError, SchemaVersionFormatError
 
 
 def test_broken_migration_files_refuse_startup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,6 +20,21 @@ def test_broken_migration_files_refuse_startup(monkeypatch: pytest.MonkeyPatch) 
     unused_connection = cast(psycopg.Connection[TupleRow], object())
 
     with capture_logs() as logs, pytest.raises(StartupError, match="not valid UTF-8"):
+        startup.run_startup_sequence(unused_connection, AcquisitionConfig(meters=(), silos=()))
+
+    assert [(entry["event"], entry["step"]) for entry in logs] == [
+        (events.DB_STARTUP_FAILED, "check_schema")
+    ]
+
+
+def test_malformed_database_schema_version_refuses_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    def malformed_version(_connection: object) -> None:
+        raise SchemaVersionFormatError("schema version '0.0.0.1' must look like MAJOR.MINOR.PATCH")
+
+    monkeypatch.setattr(startup, "check_schema_compatible", malformed_version)
+    unused_connection = cast(psycopg.Connection[TupleRow], object())
+
+    with capture_logs() as logs, pytest.raises(StartupError, match=r"0\.0\.0\.1"):
         startup.run_startup_sequence(unused_connection, AcquisitionConfig(meters=(), silos=()))
 
     assert [(entry["event"], entry["step"]) for entry in logs] == [
