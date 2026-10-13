@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.14.0",
     "pyserial>=3.5",
     "structlog>=26.1.0",
+    "tomli-w>=1.2.0",
 ]
 
 [project.scripts]
