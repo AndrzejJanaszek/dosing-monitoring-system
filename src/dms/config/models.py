@@ -13,6 +13,7 @@ DEFAULT_DATABASE_PORT = 5432
 DEFAULT_DATABASE_NAME = "dms"
 DEFAULT_TICK_INTERVAL_S = 1.0
 DEFAULT_MAX_READING_AGE_S = 1.0
+DEFAULT_MAX_SIGNAL_AGE_S = 1.0
 NON_EMPTY = 1
 DEFAULT_METER_MAX_FRAME_LENGTH = 64
 DEFAULT_BOARD_MAX_FRAME_LENGTH = 512
@@ -45,6 +46,7 @@ class SharedConfig(FrozenModel):
 class EngineConfig(FrozenModel):
     tick_interval_s: float = Field(default=DEFAULT_TICK_INTERVAL_S, gt=0)
     max_reading_age_s: float = Field(default=DEFAULT_MAX_READING_AGE_S, gt=0)
+    max_signal_age_s: float = Field(default=DEFAULT_MAX_SIGNAL_AGE_S, gt=0)
 
 
 class SerialPortConfig(FrozenModel):

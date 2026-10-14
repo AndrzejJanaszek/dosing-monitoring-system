@@ -16,6 +16,7 @@ from psycopg.rows import TupleRow
 
 from dms.simulator.catalog import SCENARIOS
 from dms.simulator.dms_config import acquisition_config, render_acquisition_toml
+from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import MeterSample, scenario_samples
 from dms.simulator.transport import SimulationRunner
 from tests.database import migrate_as_owner
@@ -30,6 +31,7 @@ RECONNECT_DELAY_S = 1.0
 SCENARIO_NAME = "dispense-short"
 MIN_ROWS = 3
 IDLE_RUN_SECONDS = 2.5
+TIMING_JITTER_S = 0.5
 
 
 EXPECTED_DISPENSE_TRANSITIONS = [(None, False), (False, True), (True, False)]
@@ -169,6 +171,14 @@ def test_service_records_readings_and_signal_changes_and_stops_cleanly(
             SCENARIO_TIMEOUT_S,
             f"the signal changes did not follow the scenario\n{service.output()}",
         )
+        poll_until(
+            lambda: (
+                query(e2e_database, "SELECT 1 FROM dms.tank_event WHERE status <> 'in_progress'")
+                != []
+            ),
+            SCENARIO_TIMEOUT_S,
+            f"the event did not end\n{service.output()}",
+        )
     finally:
         exit_code = service.terminate()
 
@@ -199,6 +209,38 @@ def test_service_records_readings_and_signal_changes_and_stops_cleanly(
     assert not [
         entry for entry in service.events("port.garbage") if entry["device_id"] == "arduino"
     ]
+    assert_dispense_event_stored(e2e_database, service, scenario)
+
+
+def assert_dispense_event_stored(database_url: str, service: Service, scenario: Scenario) -> None:
+    (dispense,) = scenario.events
+    board = scenario.layout.board
+    meter = scenario.layout.silos[0].meter
+    start_kg = scenario.start_mass_kg(1)
+    end_kg = start_kg - dispense.mass_kg
+    rate_kg_per_s = dispense.mass_kg / (dispense.end_s - dispense.start_s)
+    end_tolerance_kg = rate_kg_per_s * (1 / meter.rate_hz + TIMING_JITTER_S) + meter.division_kg
+    duration_tolerance_s = board.pins_period_s + TIMING_JITTER_S
+
+    (event_row,) = query(
+        database_url,
+        "SELECT tank_id, type, status, start_quality, end_quality, run_id, start_value_kg,"
+        " end_value_kg, duration_ms FROM dms.tank_event",
+    )
+    tank_id, kind, status, start_quality, end_quality, run_id, *values = event_row
+    start_value, end_value, duration_ms = values
+
+    assert (tank_id, kind, status) == (1, "dispense", "completed")
+    assert (start_quality, end_quality) == ("fresh", "fresh")
+    assert query(database_url, "SELECT id FROM dms.run") == [(run_id,)]
+    assert start_value == start_kg
+    assert abs(end_value - end_kg) <= end_tolerance_kg
+    expected_duration_s = dispense.end_s - dispense.start_s
+    assert abs(duration_ms / 1000 - expected_duration_s) <= duration_tolerance_s
+    assert len(service.events("event.started")) == 1
+    assert len(service.events("event.completed")) == 1
+    assert not service.events("event.incomplete")
+    assert not service.events("event.orphaned")
 
 
 def test_service_runs_without_meter_and_stops_cleanly(tmp_path: Path, e2e_database: str) -> None:

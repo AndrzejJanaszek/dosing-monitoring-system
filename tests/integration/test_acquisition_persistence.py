@@ -3,6 +3,7 @@ import threading
 from collections.abc import MutableMapping
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -18,7 +19,8 @@ from dms.config.models import (
     SiloConfig,
     TankConfig,
 )
-from dms.domain.records import MeterRecord
+from dms.domain.events import ClosedEvent, StartedEvent
+from dms.domain.records import MeterRecord, WriterRecord
 from dms.logs import events
 from dms.persistence.catalog import (
     SyncResult,
@@ -94,6 +96,12 @@ def writer_connection(fresh_database: str) -> psycopg.Connection[TupleRow]:
     connection = connect_as(fresh_database, WRITER_ROLE)
     sync_silos(connection, [silo(1)])
     return connection
+
+
+def build_store(database_url: str, connection: psycopg.Connection[TupleRow]) -> PostgresRecordStore:
+    sync_tanks(connection, [tank(1)])
+    run_id = start_run(connection, "1.2.3", {})
+    return PostgresRecordStore(connection, lambda: connect_as(database_url, WRITER_ROLE), run_id)
 
 
 def test_timestamp_keeps_microseconds() -> None:
@@ -191,13 +199,14 @@ def test_run_is_started_with_config_snapshot_and_stopped(
 def test_store_writes_and_ignores_duplicates(
     fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
 ) -> None:
-    store = PostgresRecordStore(writer_connection, lambda: connect_as(fresh_database, WRITER_ROLE))
+    store = build_store(fresh_database, writer_connection)
     batch = [MeterRecord(1, BASE_NS, 100), MeterRecord(1, BASE_NS + 1_000_000_000, 120)]
 
-    first_inserted = store.write(batch)
-    second_inserted = store.write([*batch, MeterRecord(1, BASE_NS + 2_000_000_000, 140)])
+    first = store.write(batch)
+    second = store.write([*batch, MeterRecord(1, BASE_NS + 2_000_000_000, 140)])
 
-    assert (first_inserted, second_inserted) == (2, 1)
+    assert (first.meter_inserted, second.meter_inserted) == (2, 1)
+    assert (first.meter_total, second.meter_total) == (2, 3)
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT silo_id, value_kg FROM dms.meter_reading ORDER BY t") == [
@@ -331,8 +340,8 @@ def test_connect_with_retry_connects_when_database_is_up(fresh_database: str) ->
 def test_writer_survives_terminated_connection(
     fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
 ) -> None:
-    store = PostgresRecordStore(writer_connection, lambda: connect_as(fresh_database, WRITER_ROLE))
-    in_queue: queue.Queue[MeterRecord] = queue.Queue()
+    store = build_store(fresh_database, writer_connection)
+    in_queue: queue.Queue[WriterRecord] = queue.Queue()
     writer = Writer(
         in_queue=in_queue,
         store=store,
@@ -356,3 +365,202 @@ def test_writer_survives_terminated_connection(
         events.DB_WRITE_ERROR,
         events.DB_WRITE_RECOVERED,
     ]
+
+
+EVENT_ID = UUID(int=7)
+EVENT_START_NS = BASE_NS
+EVENT_END_NS = BASE_NS + 12_345_678_000
+EVENT_COLUMNS = (
+    "id, tank_id, type, origin, status, start_quality, end_quality,"
+    " start_at, start_value_kg, end_at, end_value_kg, duration_ms"
+)
+
+
+def started(event_id: UUID = EVENT_ID, *, orphaned: bool = False) -> StartedEvent:
+    if orphaned:
+        return StartedEvent(event_id, 1, "dispense", EVENT_START_NS, None, "unknown")
+    return StartedEvent(event_id, 1, "dispense", EVENT_START_NS, 1000, "fresh")
+
+
+def closed(event_id: UUID = EVENT_ID, *, stale_end: bool = False) -> ClosedEvent:
+    return ClosedEvent(
+        event_id,
+        1,
+        "dispense",
+        EVENT_START_NS,
+        1000,
+        EVENT_END_NS,
+        None if stale_end else 400,
+        12_345_678_000,
+        "fresh",
+        "stale_reading" if stale_end else "fresh",
+    )
+
+
+def event_rows(database_url: str) -> list[TupleRow]:
+    with psycopg.connect(database_url) as reader:
+        return rows(reader, f"SELECT {EVENT_COLUMNS} FROM dms.tank_event ORDER BY start_at, id")
+
+
+def completed_row() -> tuple[object, ...]:
+    return (
+        EVENT_ID,
+        1,
+        "dispense",
+        "signal",
+        "completed",
+        "fresh",
+        "fresh",
+        timestamp_from_ns(EVENT_START_NS),
+        1000,
+        timestamp_from_ns(EVENT_END_NS),
+        400,
+        12_346,
+    )
+
+
+def test_event_start_is_stored_as_in_progress(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+
+    store.write([started()])
+
+    assert event_rows(fresh_database) == [
+        (
+            EVENT_ID,
+            1,
+            "dispense",
+            "signal",
+            "in_progress",
+            "fresh",
+            None,
+            timestamp_from_ns(EVENT_START_NS),
+            1000,
+            None,
+            None,
+            None,
+        )
+    ]
+
+
+def test_event_end_completes_the_started_row_with_the_run_id(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+
+    store.write([started()])
+    store.write([closed()])
+
+    assert event_rows(fresh_database) == [completed_row()]
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT count(*) FROM dms.tank_event WHERE run_id = 1") == [(1,)]
+
+
+def test_event_end_without_start_creates_the_row(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+
+    store.write([closed()])
+
+    assert event_rows(fresh_database) == [completed_row()]
+
+
+def test_event_end_before_start_in_one_batch_ends_complete(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+
+    store.write([closed(), started()])
+
+    assert event_rows(fresh_database) == [completed_row()]
+
+
+def test_repeated_batch_is_idempotent(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    batch: list[WriterRecord] = [started(), closed(), MeterRecord(1, BASE_NS, 100)]
+
+    store.write(batch)
+    result = store.write(batch)
+
+    assert event_rows(fresh_database) == [completed_row()]
+    assert result.meter_inserted == 0
+
+
+def test_incomplete_event_stores_both_qualities_and_empty_value(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+
+    store.write([started(), closed(stale_end=True)])
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("incomplete", "fresh", "stale_reading")
+    assert row[10] is None
+
+
+def test_orphaned_event_stores_empty_start_value(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+
+    store.write([started(orphaned=True)])
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("in_progress", "unknown", None)
+    assert row[8] is None
+
+
+def test_orphaned_event_closed_by_lost_signals_keeps_both_qualities(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    lost = ClosedEvent(
+        EVENT_ID,
+        1,
+        "dispense",
+        EVENT_START_NS,
+        None,
+        EVENT_END_NS,
+        None,
+        None,
+        "unknown",
+        "signal_lost",
+    )
+
+    store.write([started(orphaned=True), lost])
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("incomplete", "unknown", "signal_lost")
+
+
+def test_batch_mixing_readings_and_events_is_one_transaction(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    violating = ClosedEvent(
+        UUID(int=9), 1, "dispense", BASE_NS, 1, BASE_NS, 1, -2_000_000, "fresh", "fresh"
+    )
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        store.write([MeterRecord(1, BASE_NS, 100), started(), violating])
+
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT count(*) FROM dms.meter_reading") == [(0,)]
+        assert rows(reader, "SELECT count(*) FROM dms.tank_event") == [(0,)]
+
+
+def test_event_end_may_precede_start_on_the_wall_clock(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    stepped_back = ClosedEvent(
+        EVENT_ID, 1, "dispense", BASE_NS, 1, BASE_NS - 5_000_000_000, 1, 1000, "fresh", "fresh"
+    )
+
+    store.write([stepped_back])
+
+    assert len(event_rows(fresh_database)) == 1
