@@ -12,7 +12,25 @@ frame_end = "\r\n"
 reconnect_delay_s = 5.0
 silence_timeout_s = 5.0
 
+[board]
+id = "arduino"
+port = "/tmp/dms/arduino"
+baudrate = 9600
+frame_start = ""
+frame_end = "\r\n"
+reconnect_delay_s = 5.0
+silence_timeout_s = 5.0
+
 [[silos]]
 id = 1
 name = "Silos 1"
 meter_id = "meter-1"
+
+# A tank id is never reused for another tank, and a tank never moves to another silo:
+# startup is refused if the database knows the tank under a different silo.
+[[tanks]]
+id = 1
+name = "Zbiornik 1"
+silo_id = 1
+dispense = { pin = 4, active_level = 0 }
+refill = { pin = 5, active_level = 0 }

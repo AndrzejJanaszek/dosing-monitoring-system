@@ -39,6 +39,10 @@ def banner_lines(board: SignalBoard) -> tuple[str, ...]:
     )
 
 
+def encode_banner(board: SignalBoard) -> bytes:
+    return b"".join(line.encode("ascii") + BOARD_FRAME_END for line in banner_lines(board))
+
+
 def encode_sample(sample: Sample, layout: PlantLayout) -> tuple[str, bytes]:
     match sample:
         case MeterSample():

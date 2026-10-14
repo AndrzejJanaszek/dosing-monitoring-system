@@ -1,4 +1,5 @@
 import itertools
+import json
 import os
 import signal
 import subprocess
@@ -6,6 +7,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -30,6 +32,17 @@ MIN_ROWS = 3
 IDLE_RUN_SECONDS = 2.5
 
 
+EXPECTED_DISPENSE_TRANSITIONS = [(None, False), (False, True), (True, False)]
+
+
+def dispense_transitions(service: Service) -> list[tuple[bool | None, bool]]:
+    return [
+        (entry["previous"], entry["active"])
+        for entry in service.events("signal.changed")
+        if entry["tank_id"] == 1 and entry["signal"] == "dispense"
+    ]
+
+
 class Service:
     def __init__(self, process: subprocess.Popen[str], output_path: Path) -> None:
         self.process = process
@@ -37,6 +50,20 @@ class Service:
 
     def output(self) -> str:
         return self._output_path.read_text(encoding="utf-8")
+
+    def events(self, name: str) -> list[dict[str, Any]]:
+        return [entry for entry in self._log_entries() if entry["event"] == name]
+
+    def _log_entries(self) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for line in self.output().splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict) and "event" in entry:
+                entries.append(entry)
+        return entries
 
     def terminate(self) -> int:
         self.process.send_signal(signal.SIGTERM)
@@ -112,7 +139,7 @@ def simulation(tmp_path: Path) -> Iterator[SimulationRunner]:
     runner.stop()
 
 
-def test_service_records_meter_readings_and_stops_cleanly(
+def test_service_records_readings_and_signal_changes_and_stops_cleanly(
     tmp_path: Path, e2e_database: str, simulation: SimulationRunner
 ) -> None:
     scenario = SCENARIOS[SCENARIO_NAME]
@@ -137,6 +164,11 @@ def test_service_records_meter_readings_and_stops_cleanly(
             SCENARIO_TIMEOUT_S,
             f"the readings did not follow the scenario\n{service.output()}",
         )
+        poll_until(
+            lambda: len(dispense_transitions(service)) >= len(EXPECTED_DISPENSE_TRANSITIONS),
+            SCENARIO_TIMEOUT_S,
+            f"the signal changes did not follow the scenario\n{service.output()}",
+        )
     finally:
         exit_code = service.terminate()
 
@@ -152,6 +184,21 @@ def test_service_records_meter_readings_and_stops_cleanly(
     assert {row[1] for row in rows} <= sent_values
     assert any(end_kg < row[1] < start_kg for row in rows)
     assert query(e2e_database, "SELECT stopped_at IS NOT NULL FROM dms.run") == [(True,)]
+    assert dispense_transitions(service) == EXPECTED_DISPENSE_TRANSITIONS
+    refill_changes = [
+        (entry["previous"], entry["active"])
+        for entry in service.events("signal.changed")
+        if entry["tank_id"] == 1 and entry["signal"] == "refill"
+    ]
+    assert refill_changes == [(None, False)]
+    assert query(e2e_database, "SELECT id, silo_id, name, active FROM dms.tank") == [
+        (1, 1, "Zbiornik 1", True)
+    ]
+    (stored_config,) = query(e2e_database, "SELECT config FROM dms.run")[0]
+    assert {"board", "tanks"} <= stored_config.keys()
+    assert not [
+        entry for entry in service.events("port.garbage") if entry["device_id"] == "arduino"
+    ]
 
 
 def test_service_runs_without_meter_and_stops_cleanly(tmp_path: Path, e2e_database: str) -> None:

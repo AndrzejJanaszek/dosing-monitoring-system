@@ -1,10 +1,5 @@
-DEFAULT_MAX_FRAME_LENGTH = 64
-
-
 class Framer:
-    def __init__(
-        self, start: bytes, end: bytes, max_frame_length: int = DEFAULT_MAX_FRAME_LENGTH
-    ) -> None:
+    def __init__(self, start: bytes, end: bytes, max_frame_length: int) -> None:
         self._start = start
         self._end = end
         self._max_frame_length = max_frame_length

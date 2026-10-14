@@ -6,16 +6,17 @@ from typing import Any
 import pytest
 from structlog.testing import capture_logs
 
-from dms.acquisition.meters.adapter import MeterAdapter, SerialPort
 from dms.acquisition.meters.dgtp import encode_dgtp_frame, parse_dgtp_frame
-from dms.acquisition.meters.framing import Framer
-from dms.acquisition.meters.parsing import OutOfRange
+from dms.acquisition.meters.handler import MeterFrameHandler
+from dms.acquisition.serial.adapter import FrameOutcome, SerialAdapter, SerialPort
+from dms.acquisition.serial.framing import Framer
 from dms.logs import events
 from dms.messages import EngineMessage, MeterReading
 from tests.fakes import ManualClock
 
 RECONNECT_DELAY_S = 5.0
 SILENCE_TIMEOUT_S = 3.0
+MAX_FRAME_LENGTH = 64
 
 
 class FakePort:
@@ -66,14 +67,18 @@ class Harness:
         self.clock = ManualClock()
         self.messages: queue.Queue[EngineMessage] = queue.Queue()
         self.opener = ScriptedOpener(outcomes)
-        self.adapter = MeterAdapter(
-            meter_id="m1",
+        self.adapter = SerialAdapter(
+            device_id="m1",
             port_name="/dev/fake",
             port_opener=self.opener,
-            framer=Framer(b"", b"\r\n"),
-            parser=parse_dgtp_frame,
+            framer=Framer(b"", b"\r\n", MAX_FRAME_LENGTH),
+            handler=MeterFrameHandler(
+                meter_id="m1",
+                port_name="/dev/fake",
+                parser=parse_dgtp_frame,
+                out_queue=self.messages,
+            ),
             clock=self.clock,
-            out_queue=self.messages,
             stop_event=threading.Event(),
             reconnect_delay_s=RECONNECT_DELAY_S,
             silence_timeout_s=SILENCE_TIMEOUT_S,
@@ -91,6 +96,14 @@ class Harness:
             assert isinstance(message, MeterReading)
             items.append(message)
         return items
+
+
+class ConstantOutcomeHandler:
+    def __init__(self, outcome: FrameOutcome) -> None:
+        self._outcome = outcome
+
+    def handle(self, frame: bytes, wall_ns: int, mono_ns: int) -> FrameOutcome:
+        return self._outcome
 
 
 def event_names(logs: list[MutableMapping[str, Any]]) -> list[object]:
@@ -256,14 +269,13 @@ def test_run_stops_and_closes_port_when_stop_event_is_set() -> None:
     port = FakePort([])
     clock = ManualClock()
     stop = threading.Event()
-    adapter = MeterAdapter(
-        meter_id="m1",
+    adapter = SerialAdapter(
+        device_id="m1",
         port_name="/dev/fake",
         port_opener=ScriptedOpener([port]),
-        framer=Framer(b"", b"\r\n"),
-        parser=parse_dgtp_frame,
+        framer=Framer(b"", b"\r\n", MAX_FRAME_LENGTH),
+        handler=ConstantOutcomeHandler(FrameOutcome.ACCEPTED),
         clock=clock,
-        out_queue=queue.Queue(),
         stop_event=stop,
         reconnect_delay_s=RECONNECT_DELAY_S,
         silence_timeout_s=SILENCE_TIMEOUT_S,
@@ -282,30 +294,62 @@ def test_run_stops_and_closes_port_when_stop_event_is_set() -> None:
     assert port.closed
 
 
-def test_overload_keeps_port_alive_and_is_logged_on_change(
-    logs: list[MutableMapping[str, Any]],
-) -> None:
-    overload = b"OL,        ,kg\r\n"
-    underload = b"UL,        ,kg\r\n"
+def build_with_outcome(outcome: FrameOutcome, port: FakePort) -> tuple[SerialAdapter, ManualClock]:
+    clock = ManualClock()
+    adapter = SerialAdapter(
+        device_id="b1",
+        port_name="/dev/fake",
+        port_opener=ScriptedOpener([port]),
+        framer=Framer(b"", b"\r\n", MAX_FRAME_LENGTH),
+        handler=ConstantOutcomeHandler(outcome),
+        clock=clock,
+        stop_event=threading.Event(),
+        reconnect_delay_s=RECONNECT_DELAY_S,
+        silence_timeout_s=SILENCE_TIMEOUT_S,
+        wait=clock.waiter(),
+    )
+    return adapter, clock
+
+
+def test_ignored_frames_do_not_keep_the_port_alive(logs: list[MutableMapping[str, Any]]) -> None:
     port = FakePort([])
-    harness = Harness([port])
-    harness.steps(1)
+    adapter, clock = build_with_outcome(FrameOutcome.IGNORED, port)
+    adapter.step()
 
-    for frame in [overload, overload, underload, encode_dgtp_frame(40)]:
-        harness.clock.advance(SILENCE_TIMEOUT_S - 1)
-        port.feed(frame)
-        harness.steps(1)
+    for _ in range(3):
+        clock.advance(SILENCE_TIMEOUT_S - 1)
+        port.feed(b"hello\r\n")
+        adapter.step()
 
-    assert not port.closed
-    assert [reading.value_kg for reading in harness.readings()] == [40]
-    out_of_range_logs = [
-        (entry["event"], entry["status"])
-        for entry in logs
-        if entry["event"] in {events.METER_OUT_OF_RANGE, events.METER_BACK_IN_RANGE}
-    ]
-    assert out_of_range_logs == [
-        (events.METER_OUT_OF_RANGE, OutOfRange.OVERLOAD.value),
-        (events.METER_OUT_OF_RANGE, OutOfRange.UNDERLOAD.value),
-        (events.METER_BACK_IN_RANGE, OutOfRange.UNDERLOAD.value),
-    ]
+    assert port.closed
+    assert events.PORT_SILENCE in event_names(logs)
+
+
+def test_ignored_frames_are_not_counted_as_garbage(logs: list[MutableMapping[str, Any]]) -> None:
+    port = FakePort([b"hello\r\n"] * 5)
+    adapter, _ = build_with_outcome(FrameOutcome.IGNORED, port)
+
+    for _ in range(6):
+        adapter.step()
+
     assert events.PORT_GARBAGE not in event_names(logs)
+
+
+def test_rejected_frames_are_counted_as_garbage(logs: list[MutableMapping[str, Any]]) -> None:
+    port = FakePort([b"hello\r\n"])
+    adapter, _ = build_with_outcome(FrameOutcome.REJECTED, port)
+
+    adapter.step()
+    adapter.step()
+
+    assert [entry.get("rejected_count") for entry in logs if "rejected_count" in entry] == [1]
+
+
+def test_overlong_frames_are_counted_as_garbage(logs: list[MutableMapping[str, Any]]) -> None:
+    port = FakePort([b"x" * (MAX_FRAME_LENGTH + 1) + b"\r\n"])
+    adapter, _ = build_with_outcome(FrameOutcome.ACCEPTED, port)
+
+    adapter.step()
+    adapter.step()
+
+    assert [entry.get("rejected_count") for entry in logs if "rejected_count" in entry] == [1]

@@ -10,7 +10,7 @@ from functools import partial
 from pathlib import Path
 
 from dms.acquisition.clock import NS_PER_S
-from dms.simulator.encoders import BOARD_FRAME_END, banner_lines, encode_sample
+from dms.simulator.encoders import encode_banner, encode_sample
 from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import Sample, samples_from
 
@@ -118,7 +118,7 @@ class SimulationRunner:
             self._link_dir.mkdir(parents=True, exist_ok=True)
 
         board = self._scenario.layout.board
-        banner = b"".join(line.encode("ascii") + BOARD_FRAME_END for line in banner_lines(board))
+        banner = encode_banner(board)
         for device_id in self._scenario.layout.device_ids():
             link = self._link_dir / device_id if self._link_dir is not None else None
             greeting = banner if device_id == board.id else b""

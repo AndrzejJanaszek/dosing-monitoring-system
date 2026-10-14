@@ -9,12 +9,15 @@ import serial
 import structlog
 from psycopg.rows import TupleRow
 
+from dms.acquisition.arduino.handler import ArduinoFrameHandler
+from dms.acquisition.arduino.mapping import SignalMapper
 from dms.acquisition.clock import NS_PER_S, Clock
 from dms.acquisition.engine import Engine
-from dms.acquisition.meters.adapter import MeterAdapter
 from dms.acquisition.meters.dgtp import parse_dgtp_frame
-from dms.acquisition.meters.framing import Framer
+from dms.acquisition.meters.handler import MeterFrameHandler
 from dms.acquisition.meters.parsing import FrameParser
+from dms.acquisition.serial.adapter import SerialAdapter
+from dms.acquisition.serial.framing import Framer
 from dms.acquisition.ticker import TickTimer
 from dms.config.models import AcquisitionConfig, MeterFormat
 from dms.domain.records import MeterRecord
@@ -27,14 +30,14 @@ from dms.persistence.writer import PostgresRecordStore, Writer
 PORT_READ_TIMEOUT_S = 0.1
 SHUTDOWN_JOIN_TIMEOUT_S = 10.0
 SHUTDOWN_POLL_S = 0.2
-FRAME_PARSERS: Mapping[MeterFormat, FrameParser] = {"dgtp": parse_dgtp_frame}
+METER_PARSERS: Mapping[MeterFormat, FrameParser] = {"dgtp": parse_dgtp_frame}
 
 
 class AcquisitionApp:
     def __init__(
         self,
         *,
-        adapters: list[MeterAdapter],
+        adapters: list[SerialAdapter],
         timer: TickTimer,
         engine: Engine,
         writer: Writer,
@@ -121,29 +124,66 @@ def build_acquisition(
     run_id: int,
 ) -> AcquisitionApp:
     max_reading_age_ns = round(config.engine.max_reading_age_s * NS_PER_S)
-    silos_by_meter = {silo.meter_id: Silo(silo.id, max_reading_age_ns) for silo in config.silos}
+    silos_by_meter = {
+        silo.meter_id: Silo(
+            silo.id,
+            max_reading_age_ns,
+            tuple(tank.id for tank in config.tanks if tank.silo_id == silo.id),
+        )
+        for silo in config.silos
+    }
     engine_queue: queue.Queue[EngineMessage] = queue.Queue()
     record_queue: queue.Queue[MeterRecord] = queue.Queue()
     producers_stop = threading.Event()
     engine_stop = threading.Event()
     writer_stop = threading.Event()
     adapters = [
-        MeterAdapter(
-            meter_id=meter.id,
+        SerialAdapter(
+            device_id=meter.id,
             port_name=meter.port,
             port_opener=partial(
                 serial.Serial, meter.port, meter.baudrate, timeout=PORT_READ_TIMEOUT_S
             ),
-            framer=Framer(meter.frame_start.encode(), meter.frame_end.encode()),
-            parser=FRAME_PARSERS[meter.format],
+            framer=Framer(
+                meter.frame_start.encode(), meter.frame_end.encode(), meter.max_frame_length
+            ),
+            handler=MeterFrameHandler(
+                meter_id=meter.id,
+                port_name=meter.port,
+                parser=METER_PARSERS[meter.format],
+                out_queue=engine_queue,
+            ),
             clock=clock,
-            out_queue=engine_queue,
             stop_event=producers_stop,
             reconnect_delay_s=meter.reconnect_delay_s,
             silence_timeout_s=meter.silence_timeout_s,
         )
         for meter in config.meters
     ]
+    board = config.board
+    if board is not None:
+        adapters.append(
+            SerialAdapter(
+                device_id=board.id,
+                port_name=board.port,
+                port_opener=partial(
+                    serial.Serial, board.port, board.baudrate, timeout=PORT_READ_TIMEOUT_S
+                ),
+                framer=Framer(
+                    board.frame_start.encode(), board.frame_end.encode(), board.max_frame_length
+                ),
+                handler=ArduinoFrameHandler(
+                    board_id=board.id,
+                    port_name=board.port,
+                    mapper=SignalMapper(config.tanks),
+                    out_queue=engine_queue,
+                ),
+                clock=clock,
+                stop_event=producers_stop,
+                reconnect_delay_s=board.reconnect_delay_s,
+                silence_timeout_s=board.silence_timeout_s,
+            )
+        )
     store = PostgresRecordStore(connection, reconnect)
     return AcquisitionApp(
         adapters=adapters,

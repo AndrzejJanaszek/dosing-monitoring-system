@@ -2,8 +2,16 @@ from pathlib import Path
 
 import tomli_w
 
-from dms.config.models import AcquisitionConfig, MeterConfig, SiloConfig
-from dms.simulator.layout import PlantLayout
+from dms.config.models import (
+    AcquisitionConfig,
+    BoardConfig,
+    InputConfig,
+    MeterConfig,
+    SiloConfig,
+    TankConfig,
+)
+from dms.simulator.encoders import BOARD_FRAME_END
+from dms.simulator.layout import Input, PlantLayout
 
 DEFAULT_RECONNECT_DELAY_S = 5.0
 DEFAULT_SILENCE_TIMEOUT_S = 5.0
@@ -31,8 +39,31 @@ def acquisition_config(
         SiloConfig(id=silo.id, name=silo.display_name, meter_id=silo.meter_id)
         for silo in layout.silos
     )
-    return AcquisitionConfig(meters=meters, silos=silos)
+    board = BoardConfig(
+        id=layout.board.id,
+        port=str((link_dir / layout.board.id).absolute()),
+        baudrate=layout.board.baudrate,
+        frame_end=BOARD_FRAME_END.decode("ascii"),
+        reconnect_delay_s=reconnect_delay_s,
+        silence_timeout_s=silence_timeout_s,
+    )
+    tanks = tuple(
+        TankConfig(
+            id=tank.id,
+            name=tank.display_name,
+            silo_id=silo.id,
+            dispense=_input_config(tank.dispense),
+            refill=_input_config(tank.refill),
+        )
+        for silo in layout.silos
+        for tank in silo.tanks
+    )
+    return AcquisitionConfig(meters=meters, silos=silos, board=board, tanks=tanks)
+
+
+def _input_config(signal: Input) -> InputConfig:
+    return InputConfig(pin=signal.pin, active_level=signal.active_level)
 
 
 def render_acquisition_toml(config: AcquisitionConfig) -> str:
-    return tomli_w.dumps(config.model_dump(mode="json"))
+    return tomli_w.dumps(config.model_dump(mode="json", exclude_none=True))

@@ -149,7 +149,9 @@ The tests then use that server instead of a container. They still work in their 
 
 ## Configuration and logging
 
-Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
+Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`, optional `[board]` and `[[tanks]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
+
+`[board]` describes the Arduino signal module (a serial port like a meter's) and `[[tanks]]` assign its pins to tank signals: `dispense = { pin = 4, active_level = 0 }` means the tank dispenses while pin 4 reads 0. `active_level` is mandatory, `0` or `1`; a pin can be assigned once; a silo has at most two tanks; tanks need `[board]`. A silo without tanks is allowed. `max_frame_length` (optional, in `[[meters]]` and `[board]`; defaults 64 and 512 bytes) caps the length of one frame; longer ones are dropped and counted as garbage. A tank `id` is never reused for another tank, and a tank never moves to another silo: startup is refused (`catalog.identity_violation`) when the database knows the tank under a different silo. Tanks removed from the file stay in `dms.tank` as inactive.
 
 Logs are structured (structlog). `format = "auto"` prints a human-readable console format on a terminal and JSON otherwise; standard library logs go through the same renderer. Event names are listed in [docs/log-events.md](docs/log-events.md).
 
@@ -166,7 +168,7 @@ PGPASSWORD=dms DMS_CONFIG_DIR=config/example uv run dms-migrate
 
 ## Running acquisition locally
 
-The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
+The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port and logs every change of a tank signal (`signal.changed`); events are not derived from the signals yet. Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
 
 ```bash
 scripts/db-reset.sh
@@ -181,7 +183,7 @@ In a second terminal start the service (`export PGPASSWORD=dms DMS_CONFIG_DIR=co
 uv run dms-acquisition
 ```
 
-`config/example/` points at the development database and at `/tmp/dms/meter-1`, the link that `dms-simulator run <scenario> --link-dir /tmp/dms` creates for the meter of silo 1 (the Arduino port is `/tmp/dms/arduino`). Without `--wait` the scenario starts immediately; the simulator sends the resting state until then and holds the final state after the scenario ends, until `Ctrl+C`. Like a real serial device, a port only carries frames while something has it open: nothing piles up for a reader that connects later, and the Arduino port sends its startup banner on every new connection, as the board does after the reset on port open. `dms-simulator list` shows the scenarios and `dms-simulator config <scenario> --link-dir DIR` prints the `acquisition.toml` that matches a scenario's layout. In a third terminal:
+`config/example/` points at the development database, at `/tmp/dms/meter-1` and at `/tmp/dms/arduino`, the links that `dms-simulator run <scenario> --link-dir /tmp/dms` creates for the meter of silo 1 and for the Arduino module. Without `--wait` the scenario starts immediately; the simulator sends the resting state until then and holds the final state after the scenario ends, until `Ctrl+C`. Like a real serial device, a port only carries frames while something has it open: nothing piles up for a reader that connects later, and the Arduino port sends its startup banner on every new connection, as the board does after the reset on port open. `dms-simulator list` shows the scenarios and `dms-simulator config <scenario> --link-dir DIR` prints the `acquisition.toml` that matches a scenario's layout. In a third terminal:
 
 ```bash
 docker exec -it dms-dev-pg psql -U postgres -d dms -c "SELECT * FROM dms.meter_reading ORDER BY t DESC LIMIT 5"
@@ -198,7 +200,9 @@ Scenarios describe only normal operation (golden flow). A scenario is validated 
 | Exit code of `dms-acquisition` | Meaning |
 |---|---|
 | 0 | clean shutdown |
-| 1 | startup failed (database unreachable, schema incompatible), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
+| 1 | startup failed (database unreachable, schema incompatible, a tank moved to another silo), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
 | 2 | configuration invalid; all errors are printed |
 
-A meter that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.
+A meter or the Arduino module that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.
+
+The frame format of the Arduino module is provisional: only `src/dms/acquisition/arduino/frames.py` knows it, and it will be rewritten after the firmware changes.

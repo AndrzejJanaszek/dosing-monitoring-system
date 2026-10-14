@@ -1,16 +1,14 @@
 import contextlib
-import queue
 import threading
 from collections.abc import Callable
+from enum import StrEnum
 from typing import Protocol
 
 import structlog
 
 from dms.acquisition.clock import NS_PER_S, Clock
-from dms.acquisition.meters.framing import Framer
-from dms.acquisition.meters.parsing import FrameParser, OutOfRange
+from dms.acquisition.serial.framing import Framer
 from dms.logs import events
-from dms.messages import EngineMessage, MeterReading
 
 FIRST_READ_BYTES = 1
 IDLE_WAIT_S = 0.1
@@ -30,34 +28,41 @@ class SerialPort(Protocol):
 type PortOpener = Callable[[], SerialPort]
 
 
-class MeterAdapter:
+class FrameOutcome(StrEnum):
+    ACCEPTED = "accepted"
+    IGNORED = "ignored"
+    REJECTED = "rejected"
+
+
+class FrameHandler(Protocol):
+    def handle(self, frame: bytes, wall_ns: int, mono_ns: int) -> FrameOutcome: ...
+
+
+class SerialAdapter:
     def __init__(
         self,
         *,
-        meter_id: str,
+        device_id: str,
         port_name: str,
         port_opener: PortOpener,
         framer: Framer,
-        parser: FrameParser,
+        handler: FrameHandler,
         clock: Clock,
-        out_queue: queue.Queue[EngineMessage],
         stop_event: threading.Event,
         reconnect_delay_s: float,
         silence_timeout_s: float,
         wait: Callable[[float], bool] | None = None,
     ) -> None:
-        self._meter_id = meter_id
         self._port_name = port_name
         self._port_opener = port_opener
         self._framer = framer
-        self._parser = parser
+        self._handler = handler
         self._clock = clock
-        self._out_queue = out_queue
         self._stop_event = stop_event
         self._reconnect_delay_ns = round(reconnect_delay_s * NS_PER_S)
         self._silence_timeout_ns = round(silence_timeout_s * NS_PER_S)
         self._wait = wait if wait is not None else stop_event.wait
-        self._logger = structlog.get_logger().bind(meter_id=meter_id, port=port_name)
+        self._logger = structlog.get_logger().bind(device_id=device_id, port=port_name)
         self._port: SerialPort | None = None
         self._next_open_attempt_ns = 0
         self._open_failure_logged = False
@@ -66,7 +71,6 @@ class MeterAdapter:
         self._silence_origin_ns = 0
         self._silence_logged = False
         self._rejected_count = 0
-        self._out_of_range: OutOfRange | None = None
 
     def run(self) -> None:
         try:
@@ -81,7 +85,7 @@ class MeterAdapter:
             return
         self._check_silence()
         if self._port is not None:
-            self._read_and_publish(self._port)
+            self._read_and_handle(self._port)
 
     def _try_open_port(self) -> None:
         now_ns = self._clock.mono_ns()
@@ -114,7 +118,7 @@ class MeterAdapter:
         self._close_port()
         self._next_open_attempt_ns = now_ns
 
-    def _read_and_publish(self, port: SerialPort) -> None:
+    def _read_and_handle(self, port: SerialPort) -> None:
         try:
             data = port.read(FIRST_READ_BYTES)
             if data:
@@ -130,28 +134,13 @@ class MeterAdapter:
         mono_ns = self._clock.mono_ns()
         rejected_before = self._framer.rejected_count
         for frame in self._framer.feed(data):
-            parsed = self._parser(frame)
-            if parsed is None:
+            outcome = self._handler.handle(frame, wall_ns, mono_ns)
+            if outcome is FrameOutcome.ACCEPTED:
+                self._mark_alive(mono_ns)
+            elif outcome is FrameOutcome.REJECTED:
                 self._note_garbage(frame)
-            elif isinstance(parsed, OutOfRange):
-                self._note_out_of_range(parsed, mono_ns)
-            else:
-                self._publish(MeterReading(self._meter_id, parsed, wall_ns, mono_ns))
         for _ in range(self._framer.rejected_count - rejected_before):
             self._note_garbage(b"")
-
-    def _publish(self, reading: MeterReading) -> None:
-        self._mark_alive(reading.mono_ns)
-        if self._out_of_range is not None:
-            self._logger.info(events.METER_BACK_IN_RANGE, status=self._out_of_range.value)
-            self._out_of_range = None
-        self._out_queue.put(reading)
-
-    def _note_out_of_range(self, status: OutOfRange, mono_ns: int) -> None:
-        self._mark_alive(mono_ns)
-        if status != self._out_of_range:
-            self._logger.warning(events.METER_OUT_OF_RANGE, status=status.value)
-            self._out_of_range = status
 
     def _mark_alive(self, mono_ns: int) -> None:
         if self._silence_logged:
