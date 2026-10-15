@@ -292,11 +292,8 @@ class Writer:
     def _write_with_retry(self, batch: list[WriterRecord]) -> None:
         try:
             result = self._retrying(functools.partial(self._store.write, batch), len(batch))
-        except DataStoreError as error:
-            if len(batch) == 1:
-                self._reject(batch[0], error)
-            else:
-                self._write_one_by_one(batch)
+        except DataStoreError:
+            self._write_one_by_one(batch)
             return
         self._log_skipped_readings(result)
 
@@ -305,13 +302,10 @@ class Writer:
         meter_total = 0
 
         for index, item in enumerate(batch):
-            remaining = len(batch) - index - 1
             try:
-                result = self._retrying(functools.partial(self._store.write, [item]), 1)
-            except DataStoreError as error:
-                self._reject_keeping_count(item, error, remaining)
-                continue
+                result = self._write_or_reject(item)
             except WriterAbandonedError as error:
+                remaining = len(batch) - index - 1
                 raise WriterAbandonedError(error.lost_records + remaining) from error
 
             meter_inserted += result.meter_inserted
@@ -319,13 +313,12 @@ class Writer:
 
         self._log_skipped_readings(WriteResult(meter_inserted, meter_total))
 
-    def _reject_keeping_count(
-        self, item: WriterRecord, error: DataStoreError, remaining: int
-    ) -> None:
+    def _write_or_reject(self, item: WriterRecord) -> WriteResult:
         try:
+            return self._retrying(functools.partial(self._store.write, [item]), 1)
+        except DataStoreError as error:
             self._reject(item, error)
-        except WriterAbandonedError as abandoned:
-            raise WriterAbandonedError(abandoned.lost_records + remaining) from abandoned
+            return WriteResult(0, 0)
 
     def _reject(self, item: WriterRecord, error: DataStoreError) -> None:
         fallback = self._close_rejected_event(item) if isinstance(item, ClosedEvent) else None
