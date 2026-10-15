@@ -1,6 +1,19 @@
 # dosing-monitoring-system
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, commit and pull request convention.
+The dosing monitoring system watches the silos of a concrete batching plant. It reads the weight meter of each silo and the dispense and refill signals of its tanks, and stores in PostgreSQL a reading per second for each silo and every dispense and refill as an event with its start and end values.
+
+Today the system is one service, `dms-acquisition`, a single Python process with these threads:
+
+- one serial port adapter per device (a Dini Argeo DGTP meter per silo, one Arduino signal module), which turns frames into messages;
+- a timer, which sends a tick every second;
+- the engine, which owns the domain (silos and tanks) and turns messages into records; it never reads the clock or does I/O;
+- the writer, which stores the records in the database in batches.
+
+Threads pass data only through two queues; they are stopped through stop events, and the main thread waits for a shutdown flag set by `SIGTERM`/`Ctrl+C` or by a crashed thread. Next to the service there are `dms-migrate` (database migrations) and `dms-simulator` (pseudo-terminals that play scenarios instead of real devices).
+
+- [docs/coding-standards.md](docs/coding-standards.md): rules for code, tests and migrations.
+- [CONTRIBUTING.md](CONTRIBUTING.md): branches, commits and pull requests.
+- [docs/log-events.md](docs/log-events.md): every log event, its meaning and what to do about it.
 
 `legacy/` holds the previous prototype (backend, frontend, sandbox and early project notes). It is kept as reference only and is excluded from linting, type checking, tests and import contracts. New code lives in `src/dms/`.
 
@@ -43,39 +56,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### Docker Engine and GitHub CLI
 
-Docker Engine from Docker's apt repository (no Docker Desktop) and `gh` from the GitHub CLI apt repository. Run as root from your user account (`sudo bash install.sh`):
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-TARGET_USER="${SUDO_USER:?run with sudo from your user account}"
-
-apt-get update
-apt-get install -y ca-certificates curl wget
-
-install -m 0755 -d /etc/apt/keyrings
-
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
-tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-Components: stable
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-wget -nv -O /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg
-chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-  > /etc/apt/sources.list.d/github-cli.list
-
-apt-get update
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin gh
-
-usermod -aG docker "$TARGET_USER"
-```
+[scripts/install-docker-gh.sh](scripts/install-docker-gh.sh) installs Docker Engine from Docker's apt repository (no Docker Desktop) and `gh` from the GitHub CLI apt repository. Run it as root from your user account: `sudo scripts/install-docker-gh.sh`.
 
 The script adds you to the `docker` group, which lets you run Docker without `sudo` but is effectively root access on the machine. Log out and back in (or reboot) for the group to apply, then check:
 
@@ -191,6 +172,14 @@ docker exec -it dms-dev-pg psql -U postgres -d dms -c "SELECT * FROM dms.meter_r
 
 Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and event rows and sets `stopped_at` on its row in `dms.run`. If the database is unreachable at that moment, the queued readings and event rows are dropped after one last attempt (`writer.abandoned`) and `stopped_at` stays empty.
 
+| Exit code of `dms-acquisition` | Meaning |
+|---|---|
+| 0 | clean shutdown |
+| 1 | startup failed (database unreachable, schema incompatible, a tank moved to another silo), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
+| 2 | configuration invalid; all errors are printed |
+
+A meter or the Arduino module that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.
+
 ### Tank events
 
 A tank signal that turns active starts an event (`dispense` or `refill`); the row is inserted at once with status `in_progress` and completed when the signal turns inactive. The event time is the time of the signal snapshot that shows the change; the values are the latest meter reading of the tank's silo not later than that snapshot and not older than `max_reading_age_s`, with no settling delay.
@@ -231,13 +220,5 @@ The simulator package can compute the events a scenario should produce from its 
 A scenario (`src/dms/simulator/scenario.py`) is a plant layout (silos, tanks, signal module pins and polarity, meters), the starting masses and a list of `Dispense`/`Refill` events on tanks. The meter readings and the Arduino pin states are both computed from the same events, so the frames are consistent. The catalog is `src/dms/simulator/catalog.py`; to add a scenario, add it to the list passed to `build_catalog` there (or to one of the helper groups in that list).
 
 Scenarios describe only normal operation (golden flow). A scenario is validated when it is built: physically impossible or abnormal definitions (overlapping events of the same type, a dispense that empties the silo, durations or rates outside the normal range, an event during the initial quiet period, and so on) raise `ScenarioError` listing every problem, so such a scenario cannot be run and the catalog does not import.
-
-| Exit code of `dms-acquisition` | Meaning |
-|---|---|
-| 0 | clean shutdown |
-| 1 | startup failed (database unreachable, schema incompatible, a tank moved to another silo), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
-| 2 | configuration invalid; all errors are printed |
-
-A meter or the Arduino module that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.
 
 The frame format of the Arduino module is provisional: only `src/dms/acquisition/arduino/frames.py` knows it, and it will be rewritten after the firmware changes.
