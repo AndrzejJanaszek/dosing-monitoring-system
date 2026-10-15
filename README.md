@@ -168,7 +168,7 @@ PGPASSWORD=dms DMS_CONFIG_DIR=config/example uv run dms-migrate
 
 ## Running acquisition locally
 
-The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port and logs every change of a tank signal (`signal.changed`); events are not derived from the signals yet. Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
+The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port, logs every change of a tank signal (`signal.changed`) and stores each dispense and refill of a tank in `dms.tank_event` (see [Tank events](#tank-events)). Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
 
 ```bash
 scripts/db-reset.sh
@@ -189,7 +189,37 @@ uv run dms-acquisition
 docker exec -it dms-dev-pg psql -U postgres -d dms -c "SELECT * FROM dms.meter_reading ORDER BY t DESC LIMIT 5"
 ```
 
-Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and sets `stopped_at` on its row in `dms.run`. If the database is unreachable at that moment, the queued readings are dropped after one last attempt (`writer.abandoned`) and `stopped_at` stays empty.
+Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and event rows and sets `stopped_at` on its row in `dms.run`. If the database is unreachable at that moment, the queued readings and event rows are dropped after one last attempt (`writer.abandoned`) and `stopped_at` stays empty.
+
+### Tank events
+
+A tank signal that turns active starts an event (`dispense` or `refill`); the row is inserted at once with status `in_progress` and completed when the signal turns inactive. The event time is the time of the signal snapshot that shows the change; the values are the latest meter reading of the tank's silo not later than that snapshot and not older than `max_reading_age_s`, with no settling delay.
+
+Each edge of an event has its own quality, so a defect at the start and a defect at the end are both recorded.
+
+| status | meaning |
+|---|---|
+| `in_progress` | the signal is active; `end_quality` is empty (also left behind by a stopped or crashed service, see the known gap below) |
+| `completed` | both qualities are `fresh`; `start_value_kg`, `end_value_kg` and `duration_ms` are set |
+| `incomplete` | at least one quality is not `fresh`; the values that are available are stored anyway |
+
+| `start_quality` | meaning |
+|---|---|
+| `fresh` | a fresh meter reading at the start; `start_value_kg` is set |
+| `stale_reading` | no fresh meter reading at the start; `start_value_kg` is empty |
+| `unknown` | the signal was already active when the service started, or when the signals came back after being lost; `start_at` is the start of the unknown period, `start_value_kg` and `duration_ms` are empty |
+
+| `end_quality` | meaning |
+|---|---|
+| `fresh` | a fresh meter reading at the end; `end_value_kg` is set |
+| `stale_reading` | no fresh meter reading at the end; `end_value_kg` is empty |
+| `signal_lost` | no signal snapshot arrived for `max_signal_age_s` while the event was open; it ends at the last fresh snapshot, `end_value_kg` is empty |
+
+`service_stopped` and `service_crashed` exist in the `end_quality` enum for a later change. `engine.max_signal_age_s` (default 1 s) is the longest silence of the signals before the engine treats them as lost; it counts from the service start until the first snapshot.
+
+Known gap: an event still open when the service stops stays `in_progress` (the same after a crash); closing and cleaning up such rows comes with the shutdown and crash handling.
+
+The simulator package can compute the events a scenario should produce from its samples (`dms.simulator.expected_events`); `tests/integration/test_event_scenarios.py` runs the whole catalog through the handlers and the engine and compares the result.
 
 ### Simulator scenarios
 

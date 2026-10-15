@@ -1,21 +1,27 @@
-from collections import deque
+import bisect
+from operator import attrgetter
 
 from dms.messages import MeterReading
 
+MONO_NS = attrgetter("mono_ns")
+
 
 class ReadingCache:
-    def __init__(self) -> None:
-        self._readings: deque[MeterReading] = deque()
+    def __init__(self, window_ns: int) -> None:
+        self._window_ns = window_ns
+        self._readings: list[MeterReading] = []
 
     def add(self, reading: MeterReading) -> None:
-        self._readings.append(reading)
+        bisect.insort_right(self._readings, reading, key=MONO_NS)
+        oldest_kept_ns = self._readings[-1].mono_ns - self._window_ns
+        expired_count = bisect.bisect_left(self._readings, oldest_kept_ns, key=MONO_NS)
+        del self._readings[:expired_count]
 
-    def advance_to(self, mono_ns: int) -> MeterReading | None:
-        while len(self._readings) > 1 and self._readings[1].mono_ns <= mono_ns:
-            self._readings.popleft()
-        if self._readings and self._readings[0].mono_ns <= mono_ns:
-            return self._readings[0]
-        return None
+    def at_or_before(self, mono_ns: int) -> MeterReading | None:
+        after_count = bisect.bisect_right(self._readings, mono_ns, key=MONO_NS)
+        if after_count == 0:
+            return None
+        return self._readings[after_count - 1]
 
     def __len__(self) -> int:
         return len(self._readings)

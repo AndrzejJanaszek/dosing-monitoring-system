@@ -1,6 +1,7 @@
 import queue
 import threading
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from functools import partial
 
@@ -20,7 +21,7 @@ from dms.acquisition.serial.adapter import SerialAdapter
 from dms.acquisition.serial.framing import Framer
 from dms.acquisition.ticker import TickTimer
 from dms.config.models import AcquisitionConfig, MeterFormat
-from dms.domain.records import MeterRecord
+from dms.domain.records import WriterRecord
 from dms.domain.silo import Silo
 from dms.logs import events
 from dms.messages import EngineMessage
@@ -30,6 +31,7 @@ from dms.persistence.writer import PostgresRecordStore, Writer
 PORT_READ_TIMEOUT_S = 0.1
 SHUTDOWN_JOIN_TIMEOUT_S = 10.0
 SHUTDOWN_POLL_S = 0.2
+READING_CACHE_WINDOW_S = 60
 METER_PARSERS: Mapping[MeterFormat, FrameParser] = {"dgtp": parse_dgtp_frame}
 
 
@@ -115,6 +117,28 @@ class AcquisitionApp:
         )
 
 
+def build_silos(
+    config: AcquisitionConfig,
+    *,
+    new_event_id: Callable[[], uuid.UUID],
+    started_wall_ns: int,
+    started_mono_ns: int,
+) -> dict[str, Silo]:
+    return {
+        silo.meter_id: Silo(
+            silo.id,
+            max_reading_age_ns=round(config.engine.max_reading_age_s * NS_PER_S),
+            max_signal_age_ns=round(config.engine.max_signal_age_s * NS_PER_S),
+            reading_cache_window_ns=READING_CACHE_WINDOW_S * NS_PER_S,
+            tank_ids=tuple(tank.id for tank in config.tanks if tank.silo_id == silo.id),
+            new_event_id=new_event_id,
+            started_wall_ns=started_wall_ns,
+            started_mono_ns=started_mono_ns,
+        )
+        for silo in config.silos
+    }
+
+
 def build_acquisition(
     *,
     config: AcquisitionConfig,
@@ -123,17 +147,14 @@ def build_acquisition(
     reconnect: Callable[[], psycopg.Connection[TupleRow]],
     run_id: int,
 ) -> AcquisitionApp:
-    max_reading_age_ns = round(config.engine.max_reading_age_s * NS_PER_S)
-    silos_by_meter = {
-        silo.meter_id: Silo(
-            silo.id,
-            max_reading_age_ns,
-            tuple(tank.id for tank in config.tanks if tank.silo_id == silo.id),
-        )
-        for silo in config.silos
-    }
+    silos_by_meter = build_silos(
+        config,
+        new_event_id=uuid.uuid7,
+        started_wall_ns=clock.wall_ns(),
+        started_mono_ns=clock.mono_ns(),
+    )
     engine_queue: queue.Queue[EngineMessage] = queue.Queue()
-    record_queue: queue.Queue[MeterRecord] = queue.Queue()
+    record_queue: queue.Queue[WriterRecord] = queue.Queue()
     producers_stop = threading.Event()
     engine_stop = threading.Event()
     writer_stop = threading.Event()
@@ -184,7 +205,7 @@ def build_acquisition(
                 silence_timeout_s=board.silence_timeout_s,
             )
         )
-    store = PostgresRecordStore(connection, reconnect)
+    store = PostgresRecordStore(connection, reconnect, run_id)
     return AcquisitionApp(
         adapters=adapters,
         timer=TickTimer(

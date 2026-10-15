@@ -1,6 +1,7 @@
 [engine]
 tick_interval_s = 1.0
 max_reading_age_s = 1.0
+max_signal_age_s = 1.0
 
 [[meters]]
 id = "meter-1"
