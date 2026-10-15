@@ -70,6 +70,48 @@ meter_id = "{meter_id}"
 """
 
 
+BOARD_BLOCK = """
+[board]
+id = "{id}"
+port = "{port}"
+baudrate = 9600
+frame_end = "\\r\\n"
+reconnect_delay_s = 5.0
+silence_timeout_s = 5.0
+"""
+
+TANK_BLOCK = """
+[[tanks]]
+id = {id}
+name = "Zbiornik {id}"
+silo_id = {silo_id}
+dispense = {{ pin = {dispense_pin}, active_level = {active_level} }}
+refill = {{ pin = {refill_pin}, active_level = 0 }}
+"""
+
+BASE_PLANT = (
+    METER_BLOCK.format(id="m1", port="/a")
+    + SILO_BLOCK.format(id=1, meter_id="m1")
+    + BOARD_BLOCK.format(id="b1", port="/board")
+)
+
+
+def tank_block(
+    tank_id: int = 1,
+    silo_id: int = 1,
+    dispense_pin: int = 4,
+    refill_pin: int = 5,
+    active_level: str = "0",
+) -> str:
+    return TANK_BLOCK.format(
+        id=tank_id,
+        silo_id=silo_id,
+        dispense_pin=dispense_pin,
+        refill_pin=refill_pin,
+        active_level=active_level,
+    )
+
+
 def write(directory: Path, name: str, content: str) -> None:
     (directory / name).write_text(content, encoding="utf-8")
 
@@ -236,3 +278,116 @@ def test_config_dir_defaults_to_etc_dms(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv(CONFIG_DIR_VARIABLE, raising=False)
 
     assert resolve_config_dir() == Path("/etc/dms")
+
+
+def test_board_and_tanks_are_loaded(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + tank_block(1) + tank_block(2, 1, 6, 7, "1"))
+
+    config = load_acquisition(tmp_path)
+
+    assert config.board is not None
+    assert config.board.id == "b1"
+    assert config.board.max_frame_length == 512
+    assert config.meters[0].max_frame_length == 64
+    assert [
+        (tank.id, tank.silo_id, tank.dispense.pin, tank.dispense.active_level)
+        for tank in config.tanks
+    ] == [
+        (1, 1, 4, 0),
+        (2, 1, 6, 1),
+    ]
+
+
+def test_configuration_without_board_and_tanks_is_valid(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", VALID_ACQUISITION)
+
+    config = load_acquisition(tmp_path)
+
+    assert config.board is None
+    assert config.tanks == ()
+
+
+def test_board_port_equal_to_meter_port_is_reported(tmp_path: Path) -> None:
+    content = METER_BLOCK.format(id="m1", port="/a") + SILO_BLOCK.format(id=1, meter_id="m1")
+    write(tmp_path, "acquisition.toml", content + BOARD_BLOCK.format(id="b1", port="/a"))
+
+    assert errors_of(tmp_path) == ["acquisition.toml: board.port: duplicate port '/a'"]
+
+
+def test_board_id_equal_to_meter_id_is_reported(tmp_path: Path) -> None:
+    content = METER_BLOCK.format(id="m1", port="/a") + SILO_BLOCK.format(id=1, meter_id="m1")
+    write(tmp_path, "acquisition.toml", content + BOARD_BLOCK.format(id="m1", port="/b"))
+
+    assert errors_of(tmp_path) == ["acquisition.toml: board.id: duplicate id 'm1'"]
+
+
+def test_duplicate_tank_id_is_reported(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + tank_block(1) + tank_block(1, 1, 6, 7))
+
+    assert errors_of(tmp_path) == ["acquisition.toml: tanks[1].id: duplicate id '1'"]
+
+
+def test_tank_in_unknown_silo_is_reported(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + tank_block(1, silo_id=9))
+
+    assert errors_of(tmp_path) == ["acquisition.toml: tanks[0].silo_id: unknown silo 9"]
+
+
+def test_third_tank_in_a_silo_is_reported(tmp_path: Path) -> None:
+    content = BASE_PLANT + tank_block(1) + tank_block(2, 1, 6, 7) + tank_block(3, 1, 8, 9)
+    write(tmp_path, "acquisition.toml", content)
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: tanks[2].silo_id: silo 1 has more than 2 tanks"
+    ]
+
+
+def test_tanks_without_board_are_reported(tmp_path: Path) -> None:
+    content = METER_BLOCK.format(id="m1", port="/a") + SILO_BLOCK.format(id=1, meter_id="m1")
+    write(tmp_path, "acquisition.toml", content + tank_block(1))
+
+    assert errors_of(tmp_path) == ["acquisition.toml: tanks: tanks require a [board] section"]
+
+
+def test_pin_assigned_twice_is_reported_with_its_first_owner(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + tank_block(1) + tank_block(2, 1, 6, 4))
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: tanks[1].refill.pin: pin 4 is already assigned to tanks[0].dispense"
+    ]
+
+
+def test_dispense_and_refill_of_one_tank_cannot_share_a_pin(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + tank_block(1, 1, 4, 4))
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: tanks[0].refill.pin: pin 4 is already assigned to tanks[0].dispense"
+    ]
+
+
+def test_missing_active_level_is_reported_with_path(tmp_path: Path) -> None:
+    content = BASE_PLANT + tank_block(1).replace(", active_level = 0 }", " }", 1)
+    write(tmp_path, "acquisition.toml", content)
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith("acquisition.toml: tanks[0].dispense.active_level: Field required")
+
+
+@pytest.mark.parametrize("active_level", ["2", "true", "false", "-1"])
+def test_invalid_active_level_is_rejected(tmp_path: Path, active_level: str) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + tank_block(1, active_level=active_level))
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith("acquisition.toml: tanks[0].dispense.active_level:")
+
+
+@pytest.mark.parametrize("pin", ["-1", "true"])
+def test_invalid_pin_is_rejected(tmp_path: Path, pin: str) -> None:
+    content = BASE_PLANT + tank_block(1).replace("pin = 4", f"pin = {pin}")
+    write(tmp_path, "acquisition.toml", content)
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith("acquisition.toml: tanks[0].dispense.pin:")

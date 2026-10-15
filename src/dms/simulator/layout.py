@@ -43,6 +43,11 @@ class TankWiring:
     id: int
     dispense: Input
     refill: Input
+    name: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        return self.name if self.name is not None else f"Zbiornik {self.id}"
 
 
 @dataclass(frozen=True, slots=True)

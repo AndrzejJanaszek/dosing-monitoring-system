@@ -40,8 +40,14 @@ def test_migration_on_empty_database_creates_tables_and_records_versions(
     with owner_connection(fresh_database) as connection:
         applied = apply_migrations(connection, load_migrations())
 
-        assert [migration.version for migration in applied] == [1]
-        assert table_names(connection) == {"schema_migration", "silo", "run", "meter_reading"}
+        assert [migration.version for migration in applied] == [1, 2]
+        assert table_names(connection) == {
+            "schema_migration",
+            "silo",
+            "tank",
+            "run",
+            "meter_reading",
+        }
         assert database_schema_version(connection) == package_schema_version()
 
 
@@ -51,7 +57,7 @@ def test_second_run_changes_nothing(fresh_database: str) -> None:
 
         assert apply_migrations(connection, load_migrations()) == []
         row = connection.execute("SELECT count(*) FROM dms.schema_migration").fetchone()
-        assert row == (1,)
+        assert row == (2,)
 
 
 def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str) -> None:
@@ -63,7 +69,7 @@ def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str)
         with pytest.raises(ChecksumMismatchError) as raised:
             apply_migrations(connection, load_migrations())
 
-        assert raised.value.files == ["0001_init.sql"]
+        assert raised.value.files == ["0001_init.sql", "0002_tank.sql"]
         assert "meter_reading" not in table_names(connection)
 
 
@@ -71,13 +77,13 @@ def test_database_ahead_of_package_is_refused(fresh_database: str) -> None:
     with owner_connection(fresh_database) as connection:
         apply_migrations(connection, load_migrations())
         connection.execute(
-            "INSERT INTO dms.schema_migration VALUES (2, 'future', 'x', '1.1.0', now())"
+            "INSERT INTO dms.schema_migration VALUES (3, 'future', 'x', '1.2.0', now())"
         )
 
         with pytest.raises(DatabaseAheadError) as raised:
             apply_migrations(connection, load_migrations())
 
-        assert raised.value.migrations == ["0002_future"]
+        assert raised.value.migrations == ["0003_future"]
 
 
 def test_failing_migration_leaves_no_trace(fresh_database: str, tmp_path: Path) -> None:

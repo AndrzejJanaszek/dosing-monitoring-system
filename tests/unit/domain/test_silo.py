@@ -1,6 +1,7 @@
 from dms.domain.records import MeterRecord
 from dms.domain.silo import Silo
-from dms.messages import MeterReading, Tick
+from dms.domain.tank import SignalChange
+from dms.messages import MeterReading, SignalStates, TankSignals, Tick
 
 SECOND_NS = 1_000_000_000
 MAX_AGE_NS = SECOND_NS
@@ -95,3 +96,23 @@ def test_fresh_reading_clears_stale_state() -> None:
     silo.on_tick(tick(12.2))
 
     assert silo.stale_since_mono_ns is None
+
+
+def test_signals_of_other_silos_tanks_are_skipped() -> None:
+    silo = Silo(1, MAX_AGE_NS, tank_ids=(1,))
+    states = SignalStates(
+        (TankSignals(1, dispense=True, refill=False), TankSignals(2, dispense=True, refill=True)),
+        0,
+        0,
+    )
+
+    assert silo.on_signals(states) == [
+        SignalChange(1, "dispense", True, None),
+        SignalChange(1, "refill", False, None),
+    ]
+
+
+def test_silo_without_tanks_reports_no_signal_changes() -> None:
+    states = SignalStates((TankSignals(1, dispense=True, refill=True),), 0, 0)
+
+    assert Silo(1, MAX_AGE_NS).on_signals(states) == []

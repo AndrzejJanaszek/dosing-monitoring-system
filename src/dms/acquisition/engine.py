@@ -8,7 +8,7 @@ from dms.acquisition.clock import NS_PER_S
 from dms.domain.records import MeterRecord
 from dms.domain.silo import Silo
 from dms.logs import events
-from dms.messages import EngineMessage, MeterReading, Tick
+from dms.messages import EngineMessage, MeterReading, SignalStates, Tick
 
 GET_TIMEOUT_S = 0.5
 
@@ -56,6 +56,16 @@ class Engine:
             silo = self._silos_by_meter.get(message.meter_id)
             if silo is not None:
                 silo.on_reading(message)
+        elif isinstance(message, SignalStates):
+            for silo in self._silos_by_meter.values():
+                for change in silo.on_signals(message):
+                    structlog.get_logger().info(
+                        events.SIGNAL_CHANGED,
+                        tank_id=change.tank_id,
+                        signal=change.signal,
+                        active=change.active,
+                        previous=change.previous,
+                    )
         elif isinstance(message, Tick):
             for silo in self._silos_by_meter.values():
                 stale_since_before_ns = silo.stale_since_mono_ns

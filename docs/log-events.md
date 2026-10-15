@@ -19,14 +19,20 @@ Every log line has an `event` name from this catalogue. The names are constants 
 | `writer.abandoned` | ERROR | `lost_records` | The service is stopping while the database is unreachable; the writer gives up after one last attempt and the records are lost. `run.stopped_at` stays empty and the process exits with code 1. | check the database; the gap in `meter_reading` is expected |
 | `engine.fatal` | CRITICAL | `error` | The engine hit an unexpected error; the process exits. | report the traceback |
 | `thread.crashed` | CRITICAL | `thread`, `error` | An unhandled exception ended a thread; the process exits with code 1. | report the traceback; systemd restarts the service |
-| `port.opened` | INFO | `meter_id`, `port` | A serial port was opened. | none |
-| `port.open_failed` | WARNING | `meter_id`, `port`, `error` | A serial port cannot be opened; logged on the first failure of a series. | check the cable and the configured port path |
-| `port.disconnected` | WARNING | `meter_id`, `port`, `error` | Reading from a serial port failed; the adapter reconnects. | check the cable |
-| `port.silence` | WARNING | `meter_id`, `silence_timeout_s` | No valid frame arrived within the silence timeout; the adapter forces a reconnect. | check that the meter is powered and sending |
-| `port.silence_ended` | INFO | `meter_id`, `duration_s` | A valid frame arrived after a silence. | none |
-| `port.garbage` | WARNING | `meter_id`, `rejected_count` | Frames that do not parse arrive; logged for the first one and then every 100th. | check baud rate and output format of the meter |
-| `meter.out_of_range` | WARNING | `meter_id`, `port`, `status` | The meter reports overload (`OL`) or underload (`UL`); no reading is published, the port counts as alive. Logged when the state starts or changes. | check the load cell and the silo |
-| `meter.back_in_range` | INFO | `meter_id`, `port`, `status` | The meter sends weights again after an overload or underload. | none |
+| `port.opened` | INFO | `device_id`, `port` | A serial port was opened. | none |
+| `port.open_failed` | WARNING | `device_id`, `port`, `error` | A serial port cannot be opened; logged on the first failure of a series. | check the cable and the configured port path |
+| `port.disconnected` | WARNING | `device_id`, `port`, `error` | Reading from a serial port failed; the adapter reconnects. | check the cable |
+| `port.silence` | WARNING | `device_id`, `port`, `silence_timeout_s` | No frame with data arrived within the silence timeout; the adapter forces a reconnect. | check that the device is powered and sending |
+| `port.silence_ended` | INFO | `device_id`, `port`, `duration_s` | A frame with data arrived after a silence. | none |
+| `port.garbage` | WARNING | `device_id`, `port`, `rejected_count` | Frames that do not parse arrive (or exceed the frame length limit); logged for the first one and then every 100th. | check baud rate and output format of the device |
+| `meter.out_of_range` | WARNING | `device_id`, `port`, `status` | The meter reports overload (`OL`) or underload (`UL`); no reading is published, the port counts as alive. Logged when the state starts or changes. | check the load cell and the silo |
+| `meter.back_in_range` | INFO | `device_id`, `port`, `status` | The meter sends weights again after an overload or underload. | none |
+| `arduino.log` | DEBUG, INFO, WARNING or ERROR (as in the board's prefix) | `device_id`, `port`, `message` | The board sent a log line (`[DEBUG]`, `[INFO]`, `[WARNING]` or `[ERROR]` prefix), for example a banner line after reset; it does not count as data for the silence timeout. | read ERROR lines: the firmware reports a failure in `setup()` |
+| `arduino.pins_missing` | WARNING | `device_id`, `port`, `pins` | A `pins` frame lacks configured pins; no signal states are published. Logged when the state starts or the set of missing pins changes. | compare `[[tanks]]` pins with the firmware's `REGISTERED io-pin` banner lines |
+| `arduino.pins_restored` | INFO | `device_id`, `port` | A `pins` frame with all configured pins arrived after missing pins. | none |
+| `signal.changed` | INFO | `tank_id`, `signal`, `active`, `previous` | A tank signal (`dispense` or `refill`) changed; `previous` is `null` for the first state after startup. | none |
+| `catalog.synced` | INFO | `silos_added`, `silos_reactivated`, `silos_deactivated`, `tanks_added`, `tanks_reactivated`, `tanks_deactivated` | The configuration was written to the catalogue tables at startup; the fields list ids. | check that an unexpectedly deactivated silo or tank was removed from the configuration on purpose |
+| `catalog.identity_violation` | CRITICAL | `tanks` | Tanks in the configuration belong to a different silo than in the database; each item has `tank_id`, `database_silo_id`, `config_silo_id`. Startup is refused (exit code 1). | restore the tank's silo in the configuration, or give the tank a new `id` and leave the old one out |
 | `silo.reading_stale` | WARNING | `silo_id` | The latest reading of the silo's meter is older than `max_reading_age_s`; the engine creates no records for this silo until a fresh reading arrives. | check the meter's port events (`port.*`) |
 | `silo.reading_stale_ended` | INFO | `silo_id`, `duration_s` | A fresh reading arrived after a stale period; `duration_s` counts from the moment the last reading became stale. | none |
 | `migrate.applied` | INFO | `migration`, `schema_version` | One migration file was applied. | none |

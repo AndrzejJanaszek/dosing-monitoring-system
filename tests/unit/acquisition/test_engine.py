@@ -7,7 +7,7 @@ from dms.acquisition.engine import Engine
 from dms.domain.records import MeterRecord
 from dms.domain.silo import Silo
 from dms.logs import events
-from dms.messages import EngineMessage, MeterReading, Tick
+from dms.messages import EngineMessage, MeterReading, SignalStates, TankSignals, Tick
 
 SECOND_NS = 1_000_000_000
 
@@ -18,7 +18,10 @@ def build() -> tuple[Engine, queue.Queue[EngineMessage], queue.Queue[MeterRecord
     engine = Engine(
         in_queue=in_queue,
         out_queue=out_queue,
-        silos_by_meter={"m1": Silo(1, SECOND_NS), "m2": Silo(2, SECOND_NS)},
+        silos_by_meter={
+            "m1": Silo(1, SECOND_NS, tank_ids=(1,)),
+            "m2": Silo(2, SECOND_NS, tank_ids=(2,)),
+        },
         stop_event=threading.Event(),
     )
     return engine, in_queue, out_queue
@@ -97,3 +100,43 @@ def test_stale_and_recovered_reading_are_logged_once_each() -> None:
         (events.SILO_READING_STALE_ENDED, 1),
     ]
     assert logs[1]["duration_s"] == 4.0
+
+
+def test_signal_changes_are_logged_for_the_right_tanks() -> None:
+    engine, in_queue, _ = build()
+    in_queue.put(
+        SignalStates(
+            (
+                TankSignals(1, dispense=True, refill=False),
+                TankSignals(2, dispense=False, refill=False),
+            ),
+            0,
+            0,
+        )
+    )
+
+    with capture_logs() as logs:
+        engine.step()
+
+    assert [
+        (entry["event"], entry["tank_id"], entry["signal"], entry["active"], entry["previous"])
+        for entry in logs
+    ] == [
+        (events.SIGNAL_CHANGED, 1, "dispense", True, None),
+        (events.SIGNAL_CHANGED, 1, "refill", False, None),
+        (events.SIGNAL_CHANGED, 2, "dispense", False, None),
+        (events.SIGNAL_CHANGED, 2, "refill", False, None),
+    ]
+
+
+def test_unchanged_signals_are_not_logged_again() -> None:
+    engine, in_queue, _ = build()
+    states = SignalStates((TankSignals(1, dispense=True, refill=False),), 0, 0)
+    in_queue.put(states)
+    in_queue.put(states)
+    engine.step()
+
+    with capture_logs() as logs:
+        engine.step()
+
+    assert logs == []
