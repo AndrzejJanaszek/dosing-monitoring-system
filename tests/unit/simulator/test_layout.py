@@ -1,0 +1,132 @@
+from collections.abc import Callable
+
+import pytest
+
+from dms.simulator.errors import ScenarioError
+from dms.simulator.layout import (
+    Input,
+    MeterDevice,
+    PlantLayout,
+    SignalBoard,
+    SiloLayout,
+    TemperatureSensor,
+)
+from tests.unit.simulator.builders import one_tank_layout, tank, two_tank_layout
+
+THREE_TANKS = (tank(1, 4, 5), tank(2, 6, 7), tank(3, 8, 9))
+
+
+def test_valid_layout_exposes_lookups() -> None:
+    layout = two_tank_layout()
+
+    assert layout.tank(2).dispense.pin == 6
+    assert layout.silo_of(2).id == 1
+    assert layout.silo_of_meter("meter-1").id == 1
+    assert layout.device_ids() == ("meter-1", "arduino")
+
+
+def test_silo_names_and_meter_ids() -> None:
+    assert SiloLayout(3, (tank(1, 4, 5),)).display_name == "Silos 3"
+    assert SiloLayout(3, (tank(1, 4, 5),), name="Cement").display_name == "Cement"
+    assert SiloLayout(3, (tank(1, 4, 5),)).meter_id == "meter-3"
+
+
+INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
+    "L1": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(1, (tank(2, 6, 7),)))),
+        "silos[1].id: duplicate silo id 1",
+    ),
+    "L2": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(2, (tank(1, 6, 7),)))),
+        "silos[1].tanks[0].id: duplicate tank id 1",
+    ),
+    "L3-none": (lambda: PlantLayout((SiloLayout(1, ()),)), "silos[0].tanks: 0 tanks"),
+    "L3-many": (lambda: PlantLayout((SiloLayout(1, THREE_TANKS),)), "silos[0].tanks: 3 tanks"),
+    "L4": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 4),)),)),
+        "silos[0].tanks[0].refill.pin: pin 4 is already used",
+    ),
+    "L5": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 12),)),)),
+        "silos[0].tanks[0].refill.pin: pin 12 is not on board",
+    ),
+    "L6": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5, active_level=2),)),)),
+        "active_level: 2 is not 0 or 1",
+    ),
+    "L7": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),)),), SignalBoard(pins=(4, 5, 5))),
+        "board.pins: duplicate pin 5",
+    ),
+    "L8-format": (
+        lambda: PlantLayout(
+            one_tank_layout().silos, SignalBoard(sensors=(TemperatureSensor("28a8", 20.0),))
+        ),
+        "board.sensors[0].address",
+    ),
+    "L8-duplicate": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(
+                    TemperatureSensor("28A8F126AB240B1C", 20.0),
+                    TemperatureSensor("28A8F126AB240B1C", 21.0),
+                )
+            ),
+        ),
+        "board.sensors[1].address: duplicate",
+    ),
+    "L9-silo": (
+        lambda: PlantLayout((SiloLayout(0, (tank(1, 4, 5),)),)),
+        "silos[0].id: 0 is outside",
+    ),
+    "L9-tank": (
+        lambda: PlantLayout((SiloLayout(1, (tank(40000, 4, 5),)),)),
+        "silos[0].tanks[0].id: 40000 is outside",
+    ),
+    "L10-rate": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(rate_hz=0)),)),
+        "meter.rate_hz",
+    ),
+    "L10-rate-too-high": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(rate_hz=1e10)),)),
+        "meter.rate_hz: 1e+10 is outside",
+    ),
+    "L10-division": (
+        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(division_kg=-1)),)),
+        "meter.division_kg",
+    ),
+    "L10-period": (
+        lambda: PlantLayout(one_tank_layout().silos, SignalBoard(pins_period_s=0)),
+        "board.pins_period_s",
+    ),
+    "L10-period-too-short": (
+        lambda: PlantLayout(one_tank_layout().silos, SignalBoard(temperatures_period_s=1e-10)),
+        "board.temperatures_period_s: 1e-10 s is shorter than",
+    ),
+    "L11": (
+        lambda: PlantLayout(one_tank_layout().silos, SignalBoard(id="meter-1")),
+        "board.id: 'meter-1' is also a meter id",
+    ),
+}
+
+
+@pytest.mark.parametrize("rule", INVALID_LAYOUTS)
+def test_invalid_layout_is_rejected(rule: str) -> None:
+    build, expected_fragment = INVALID_LAYOUTS[rule]
+
+    with pytest.raises(ScenarioError) as raised:
+        build()
+
+    assert any(expected_fragment in error for error in raised.value.errors), raised.value.errors
+
+
+def test_several_layout_errors_are_reported_together() -> None:
+    with pytest.raises(ScenarioError) as raised:
+        PlantLayout((SiloLayout(1, (tank(1, 4, 12, active_level=2),)),))
+
+    assert len(raised.value.errors) == 3
+
+
+def test_input_defaults_to_active_low() -> None:
+    assert Input(4).active_level == 0

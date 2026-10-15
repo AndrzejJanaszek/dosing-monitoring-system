@@ -3,8 +3,8 @@ tick_interval_s = 1.0
 max_reading_age_s = 1.0
 
 [[meters]]
-id = "m1"
-port = "/tmp/dms-meter"
+id = "meter-1"
+port = "/tmp/dms/meter-1"
 baudrate = 9600
 format = "dgtp"
 frame_start = ""
@@ -15,4 +15,4 @@ silence_timeout_s = 5.0
 [[silos]]
 id = 1
 name = "Silos 1"
-meter_id = "m1"
+meter_id = "meter-1"

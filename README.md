@@ -166,23 +166,34 @@ PGPASSWORD=dms DMS_CONFIG_DIR=config/example uv run dms-migrate
 
 ## Running acquisition locally
 
-The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. Without hardware, the simulator provides a pseudo-terminal that behaves like a Dini Argeo DGTP meter.
+The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
 
 ```bash
 scripts/db-reset.sh
 export PGPASSWORD=dms DMS_CONFIG_DIR=config/example
 uv run dms-migrate
-uv run dms-simulator meter --link /tmp/dms-meter &
+uv run dms-simulator run dispense-single --link-dir /tmp/dms --wait
+```
+
+In a second terminal start the service (`export PGPASSWORD=dms DMS_CONFIG_DIR=config/example` first), then press Enter in the first one to start the scenario:
+
+```bash
 uv run dms-acquisition
 ```
 
-`config/example/` points at the development database and at `/tmp/dms-meter`. In a second terminal:
+`config/example/` points at the development database and at `/tmp/dms/meter-1`, the link that `dms-simulator run <scenario> --link-dir /tmp/dms` creates for the meter of silo 1 (the Arduino port is `/tmp/dms/arduino`). Without `--wait` the scenario starts immediately; the simulator sends the resting state until then and holds the final state after the scenario ends, until `Ctrl+C`. Like a real serial device, a port only carries frames while something has it open: nothing piles up for a reader that connects later, and the Arduino port sends its startup banner on every new connection, as the board does after the reset on port open. `dms-simulator list` shows the scenarios and `dms-simulator config <scenario> --link-dir DIR` prints the `acquisition.toml` that matches a scenario's layout. In a third terminal:
 
 ```bash
 docker exec -it dms-dev-pg psql -U postgres -d dms -c "SELECT * FROM dms.meter_reading ORDER BY t DESC LIMIT 5"
 ```
 
-Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and sets `stopped_at` on its row in `dms.run`. If the database is unreachable at that moment, the queued readings are dropped after one last attempt (`writer.abandoned`) and `stopped_at` stays empty. The simulator options are `--rate` (frames per second), `--start` and `--step` (a sawtooth of 50 steps) and `--link`.
+Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings and sets `stopped_at` on its row in `dms.run`. If the database is unreachable at that moment, the queued readings are dropped after one last attempt (`writer.abandoned`) and `stopped_at` stays empty.
+
+### Simulator scenarios
+
+A scenario (`src/dms/simulator/scenario.py`) is a plant layout (silos, tanks, signal module pins and polarity, meters), the starting masses and a list of `Dispense`/`Refill` events on tanks. The meter readings and the Arduino pin states are both computed from the same events, so the frames are consistent. The catalog is `src/dms/simulator/catalog.py`; to add a scenario, add it to the list passed to `build_catalog` there (or to one of the helper groups in that list).
+
+Scenarios describe only normal operation (golden flow). A scenario is validated when it is built: physically impossible or abnormal definitions (overlapping events of the same type, a dispense that empties the silo, durations or rates outside the normal range, an event during the initial quiet period, and so on) raise `ScenarioError` listing every problem, so such a scenario cannot be run and the catalog does not import.
 
 | Exit code of `dms-acquisition` | Meaning |
 |---|---|
