@@ -7,6 +7,7 @@ from psycopg.rows import TupleRow
 from dms.config.models import AcquisitionConfig
 from dms.logs import events
 from dms.persistence.catalog import (
+    close_crashed_events,
     start_run,
     sync_silos,
     sync_tanks,
@@ -49,6 +50,7 @@ def run_startup_sequence(
                 importlib.metadata.version(PACKAGE_NAME),
                 config.model_dump(mode="json", exclude_none=True),
             )
+            crashed_events = close_crashed_events(connection, run_id)
     except psycopg.Error as error:
         logger.critical(events.DB_STARTUP_FAILED, step="catalog_and_run", error=str(error))
         raise StartupError(str(error)) from error
@@ -61,6 +63,15 @@ def run_startup_sequence(
         tanks_reactivated=list(tanks.reactivated),
         tanks_deactivated=list(tanks.deactivated),
     )
+
+    if crashed_events:
+        logger.error(
+            events.EVENT_CRASH_CLOSED,
+            count=len(crashed_events),
+            events=[
+                {"event_id": str(item.event_id), "tank_id": item.tank_id} for item in crashed_events
+            ],
+        )
     return run_id
 
 

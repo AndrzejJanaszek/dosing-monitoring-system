@@ -65,6 +65,12 @@ class Silo:
         records.extend(self._events_closed_by_lost_signals(tick))
         return records
 
+    def on_shutdown(self) -> list[ClosedEvent]:
+        closed: list[ClosedEvent] = []
+        for tank in self._tanks.values():
+            closed.extend(tank.on_shutdown(self._last_signals_wall_ns, self._last_signals_mono_ns))
+        return closed
+
     def _fresh_value_at(self, mono_ns: int) -> int | None:
         reading = self._cache.at_or_before(mono_ns)
         if reading is None or mono_ns - reading.mono_ns > self._max_reading_age_ns:

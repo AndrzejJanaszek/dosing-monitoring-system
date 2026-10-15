@@ -34,6 +34,7 @@ class Engine:
             while not self._stop_event.is_set():
                 self.step()
             self._drain()
+            self._close_open_events()
         except Exception as error:
             structlog.get_logger().critical(events.ENGINE_FATAL, error=repr(error))
             raise
@@ -52,6 +53,10 @@ class Engine:
             except queue.Empty:
                 return
             self.handle(message)
+
+    def _close_open_events(self) -> None:
+        for silo in self._silos_by_meter.values():
+            self._route(silo.on_shutdown())
 
     def handle(self, message: EngineMessage) -> None:
         if isinstance(message, MeterReading):

@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
+from uuid import UUID
 
 import psycopg
 from psycopg.rows import TupleRow
@@ -23,6 +24,39 @@ class TankMove:
     config_silo_id: int
 
 
+@dataclass(frozen=True, slots=True)
+class CrashClosedEvent:
+    event_id: UUID
+    tank_id: int
+
+
+CLOSE_CRASHED_EVENTS_SQL = """
+UPDATE dms.tank_event AS event
+SET status = 'incomplete',
+    end_quality = 'service_crashed',
+    end_at = coalesce(
+        (
+            SELECT max(reading.t)
+            FROM dms.meter_reading AS reading
+            WHERE reading.silo_id = tank.silo_id
+              AND reading.t >= event.start_at
+              AND reading.t < (
+                  SELECT min(next_run.started_at)
+                  FROM dms.run AS next_run
+                  WHERE next_run.started_at > event_run.started_at
+              )
+        ),
+        event.start_at
+    )
+FROM dms.tank AS tank, dms.run AS event_run
+WHERE tank.id = event.tank_id
+  AND event_run.id = event.run_id
+  AND event.status = 'in_progress'
+  AND event.run_id <> %s
+RETURNING event.id, event.tank_id
+"""
+
+
 def start_run(
     connection: psycopg.Connection[TupleRow], app_version: str, config: dict[str, Any]
 ) -> int:
@@ -34,6 +68,13 @@ def start_run(
         raise RuntimeError("INSERT INTO dms.run returned no row")
     run_id: int = row[0]
     return run_id
+
+
+def close_crashed_events(
+    connection: psycopg.Connection[TupleRow], current_run_id: int
+) -> list[CrashClosedEvent]:
+    rows = connection.execute(CLOSE_CRASHED_EVENTS_SQL, [current_run_id]).fetchall()
+    return [CrashClosedEvent(event_id, tank_id) for event_id, tank_id in rows]
 
 
 def stop_run(connection: psycopg.Connection[TupleRow], run_id: int) -> None:

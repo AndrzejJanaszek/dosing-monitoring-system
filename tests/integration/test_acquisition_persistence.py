@@ -32,7 +32,7 @@ from dms.persistence.catalog import (
     tank_identity_violations,
 )
 from dms.persistence.connection import StartupError, connect_with_retry
-from dms.persistence.writer import PostgresRecordStore, Writer, timestamp_from_ns
+from dms.persistence.writer import DataStoreError, PostgresRecordStore, Writer, timestamp_from_ns
 from tests.database import connect_as, migrate_as_owner
 
 WRITER_ROLE = "dms_writer"
@@ -545,7 +545,7 @@ def test_batch_mixing_readings_and_events_is_one_transaction(
         UUID(int=9), 1, "dispense", BASE_NS, 1, BASE_NS, 1, -2_000_000, "fresh", "fresh"
     )
 
-    with pytest.raises(psycopg.errors.CheckViolation):
+    with pytest.raises(DataStoreError):
         store.write([MeterRecord(1, BASE_NS, 100), started(), violating])
 
     with psycopg.connect(fresh_database) as reader:
@@ -564,3 +564,287 @@ def test_event_end_may_precede_start_on_the_wall_clock(
     store.write([stepped_back])
 
     assert len(event_rows(fresh_database)) == 1
+
+
+NS_PER_S = 1_000_000_000
+RESTART_CONFIG = acquisition_config([silo(1)], [tank(1)])
+
+
+def seed_run(connection: psycopg.Connection[TupleRow], started_at_ns: int) -> int:
+    run_id = start_run(connection, "1.2.3", {})
+    connection.execute(
+        "UPDATE dms.run SET started_at = %s WHERE id = %s",
+        [timestamp_from_ns(started_at_ns), run_id],
+    )
+    return run_id
+
+
+def seed_reading(connection: psycopg.Connection[TupleRow], silo_id: int, wall_ns: int) -> None:
+    connection.execute(
+        "INSERT INTO dms.meter_reading (silo_id, t, value_kg) VALUES (%s, %s, 100)",
+        [silo_id, timestamp_from_ns(wall_ns)],
+    )
+
+
+def seed_event(
+    connection: psycopg.Connection[TupleRow],
+    run_id: int,
+    event_id: UUID,
+    start_ns: int,
+    *,
+    tank_id: int = 1,
+    status: str = "in_progress",
+    start_quality: str = "fresh",
+) -> None:
+    ended = status != "in_progress"
+    connection.execute(
+        "INSERT INTO dms.tank_event (id, tank_id, run_id, type, origin, status, start_at,"
+        " start_value_kg, start_quality, end_at, end_value_kg, end_quality, duration_ms)"
+        " VALUES (%s, %s, %s, 'dispense', 'signal', %s, %s, %s, %s, %s, %s, %s, %s)",
+        [
+            event_id,
+            tank_id,
+            run_id,
+            status,
+            timestamp_from_ns(start_ns),
+            None if start_quality == "unknown" else 1000,
+            start_quality,
+            timestamp_from_ns(start_ns + NS_PER_S) if ended else None,
+            400 if status == "completed" else None,
+            None if not ended else "fresh" if status == "completed" else "signal_lost",
+            1000 if status == "completed" else None,
+        ],
+    )
+
+
+@pytest.fixture
+def crashed_run(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> tuple[psycopg.Connection[TupleRow], int]:
+    sync_tanks(writer_connection, [tank(1)])
+    return writer_connection, seed_run(writer_connection, BASE_NS)
+
+
+def restart(connection: psycopg.Connection[TupleRow]) -> int:
+    return run_startup_sequence(connection, RESTART_CONFIG)
+
+
+def test_restart_closes_event_in_progress_at_the_last_reading_before_the_new_run(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    seed_event(connection, run_id, EVENT_ID, BASE_NS + 10 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 5 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 20 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 30 * NS_PER_S)
+    connection.execute(
+        "INSERT INTO dms.meter_reading (silo_id, t, value_kg)"
+        " VALUES (1, now() + interval '1 day', 100)"
+    )
+
+    restart(connection)
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("incomplete", "fresh", "service_crashed")
+    assert row[9] == timestamp_from_ns(BASE_NS + 30 * NS_PER_S)
+    assert (row[10], row[11]) == (None, None)
+
+
+def test_restart_closes_event_without_readings_with_a_zero_length_interval(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    seed_event(connection, run_id, EVENT_ID, BASE_NS + 10 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 5 * NS_PER_S)
+
+    restart(connection)
+
+    (row,) = event_rows(fresh_database)
+    assert row[7] == row[9] == timestamp_from_ns(BASE_NS + 10 * NS_PER_S)
+
+
+def test_restart_ignores_readings_of_other_silos(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    sync_silos(connection, [silo(1), silo(2)])
+    seed_event(connection, run_id, EVENT_ID, BASE_NS + 10 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 20 * NS_PER_S)
+    seed_reading(connection, 2, BASE_NS + 40 * NS_PER_S)
+
+    restart(connection)
+
+    (row,) = event_rows(fresh_database)
+    assert row[9] == timestamp_from_ns(BASE_NS + 20 * NS_PER_S)
+
+
+def test_restart_closes_an_orphaned_event_in_progress(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    seed_event(connection, run_id, EVENT_ID, BASE_NS, start_quality="unknown")
+
+    restart(connection)
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("incomplete", "unknown", "service_crashed")
+    assert row[8] is None
+
+
+def test_restart_leaves_finished_events_alone(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    seed_event(connection, run_id, UUID(int=1), BASE_NS, status="completed")
+    seed_event(connection, run_id, UUID(int=2), BASE_NS + NS_PER_S, status="incomplete")
+    before = event_rows(fresh_database)
+
+    with capture_logs() as logs:
+        restart(connection)
+
+    assert event_rows(fresh_database) == before
+    assert [entry for entry in logs if entry["event"] == events.EVENT_CRASH_CLOSED] == []
+
+
+def test_restart_leaves_the_interrupted_run_without_stop_time(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    seed_event(connection, run_id, EVENT_ID, BASE_NS)
+
+    new_run_id = restart(connection)
+
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT id, stopped_at FROM dms.run ORDER BY id") == [
+            (run_id, None),
+            (new_run_id, None),
+        ]
+
+
+def test_restart_keeps_the_end_of_an_older_event_inside_its_own_run(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, first_run_id = crashed_run
+    seed_run(connection, BASE_NS + 100 * NS_PER_S)
+    seed_event(connection, first_run_id, EVENT_ID, BASE_NS + 10 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 20 * NS_PER_S)
+    seed_reading(connection, 1, BASE_NS + 150 * NS_PER_S)
+
+    restart(connection)
+
+    (row,) = event_rows(fresh_database)
+    assert row[9] == timestamp_from_ns(BASE_NS + 20 * NS_PER_S)
+
+
+def test_restart_logs_the_closed_events_once(
+    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+) -> None:
+    connection, run_id = crashed_run
+    seed_event(connection, run_id, UUID(int=1), BASE_NS)
+    seed_event(connection, run_id, UUID(int=2), BASE_NS + NS_PER_S)
+
+    with capture_logs() as logs:
+        restart(connection)
+
+    (crash_closed,) = [entry for entry in logs if entry["event"] == events.EVENT_CRASH_CLOSED]
+    assert crash_closed["log_level"] == "error"
+    assert crash_closed["count"] == 2
+    assert sorted(item["event_id"] for item in crash_closed["events"]) == [
+        str(UUID(int=1)),
+        str(UUID(int=2)),
+    ]
+    assert {item["tank_id"] for item in crash_closed["events"]} == {1}
+
+
+def build_writer(store: PostgresRecordStore) -> tuple[Writer, queue.Queue[WriterRecord]]:
+    in_queue: queue.Queue[WriterRecord] = queue.Queue()
+    writer = Writer(
+        in_queue=in_queue,
+        store=store,
+        stop_event=threading.Event(),
+        retry_delay_s=0,
+        wait=lambda _seconds: False,
+    )
+    return writer, in_queue
+
+
+def test_batch_with_a_rejected_record_stores_the_other_records_and_keeps_going(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    writer, in_queue = build_writer(build_store(fresh_database, writer_connection))
+    unknown_tank = ClosedEvent(
+        UUID(int=9), 99, "dispense", BASE_NS, 1, BASE_NS, 1, 1000, "fresh", "fresh"
+    )
+    for item in (MeterRecord(1, BASE_NS, 100), started(), unknown_tank):
+        in_queue.put(item)
+
+    with capture_logs() as logs:
+        writer.step()
+    in_queue.put(MeterRecord(1, BASE_NS + NS_PER_S, 110))
+    writer.step()
+
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [(100,), (110,)]
+    assert [row[4] for row in event_rows(fresh_database)] == ["in_progress"]
+    (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
+    assert rejected["log_level"] == "critical"
+    assert rejected["record_type"] == "ClosedEvent"
+    assert rejected["record"]["tank_id"] == 99
+    assert rejected["fallback"] == "no_row"
+
+
+def test_rejected_event_end_closes_the_row_in_progress_as_record_rejected(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    writer, in_queue = build_writer(store)
+    store.write([started()])
+    violating = ClosedEvent(
+        EVENT_ID,
+        1,
+        "dispense",
+        EVENT_START_NS,
+        1000,
+        EVENT_END_NS,
+        400,
+        -2_000_000,
+        "fresh",
+        "fresh",
+    )
+    in_queue.put(violating)
+
+    with capture_logs() as logs:
+        writer.step()
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("incomplete", "fresh", "record_rejected")
+    assert row[9] == timestamp_from_ns(EVENT_END_NS)
+    assert (row[10], row[11]) == (None, None)
+    (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
+    assert rejected["fallback"] == "closed"
+
+
+def test_rejected_event_end_does_not_touch_a_row_that_is_not_in_progress(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    writer, in_queue = build_writer(store)
+    store.write([started(), closed()])
+    before = event_rows(fresh_database)
+    violating = ClosedEvent(
+        EVENT_ID,
+        1,
+        "dispense",
+        EVENT_START_NS,
+        1000,
+        EVENT_END_NS,
+        400,
+        -2_000_000,
+        "fresh",
+        "fresh",
+    )
+    in_queue.put(violating)
+
+    writer.step()
+
+    assert event_rows(fresh_database) == before

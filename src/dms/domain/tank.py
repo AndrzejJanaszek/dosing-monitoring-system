@@ -60,8 +60,10 @@ class SignalEventTracker:
             return []
         return self._close(wall_ns, mono_ns, value_kg, _end_quality(value_kg))
 
-    def on_lost(self, last_fresh_wall_ns: int, last_fresh_mono_ns: int) -> list[ClosedEvent]:
-        closed = self._close(last_fresh_wall_ns, last_fresh_mono_ns, None, "signal_lost")
+    def close_open(
+        self, last_fresh_wall_ns: int, last_fresh_mono_ns: int, end_quality: EndQuality
+    ) -> list[ClosedEvent]:
+        closed = self._close(last_fresh_wall_ns, last_fresh_mono_ns, None, end_quality)
         self._phase = _Phase.UNKNOWN
         self._unknown_since_wall_ns = last_fresh_wall_ns
         return closed
@@ -158,7 +160,15 @@ class Tank:
     ) -> list[ClosedEvent]:
         self._dispense = None
         self._refill = None
+        return self._close_open_events(last_fresh_wall_ns, last_fresh_mono_ns, "signal_lost")
+
+    def on_shutdown(self, last_fresh_wall_ns: int, last_fresh_mono_ns: int) -> list[ClosedEvent]:
+        return self._close_open_events(last_fresh_wall_ns, last_fresh_mono_ns, "service_stopped")
+
+    def _close_open_events(
+        self, last_fresh_wall_ns: int, last_fresh_mono_ns: int, end_quality: EndQuality
+    ) -> list[ClosedEvent]:
         return [
-            *self._dispense_events.on_lost(last_fresh_wall_ns, last_fresh_mono_ns),
-            *self._refill_events.on_lost(last_fresh_wall_ns, last_fresh_mono_ns),
+            *self._dispense_events.close_open(last_fresh_wall_ns, last_fresh_mono_ns, end_quality),
+            *self._refill_events.close_open(last_fresh_wall_ns, last_fresh_mono_ns, end_quality),
         ]
