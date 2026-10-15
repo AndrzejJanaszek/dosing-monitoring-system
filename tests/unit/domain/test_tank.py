@@ -397,3 +397,62 @@ def test_dispense_and_refill_overlap_on_one_tank_independently() -> None:
 
     assert [(item.kind, item.event_id) for item in closed_dispense] == [("dispense", event_id(1))]
     assert [(item.kind, item.event_id) for item in closed_refill] == [("refill", event_id(2))]
+
+
+def test_shutdown_closes_an_event_in_progress_as_service_stopped_at_the_last_snapshot() -> None:
+    tank = build_tank()
+    feed(tank, False, False, 1)
+    feed(tank, True, False, 2, value_kg=500)
+
+    closed = tank.on_shutdown(2_004 * SECOND_NS, 4 * SECOND_NS)
+
+    assert closed == [
+        ClosedEvent(
+            event_id(1),
+            3,
+            "dispense",
+            2_002 * SECOND_NS,
+            500,
+            2_004 * SECOND_NS,
+            None,
+            2 * SECOND_NS,
+            "fresh",
+            "service_stopped",
+        )
+    ]
+
+
+def test_shutdown_closes_an_orphaned_event_without_duration() -> None:
+    tank = build_tank()
+    feed(tank, True, False, 1)
+
+    closed = tank.on_shutdown(2_004 * SECOND_NS, 4 * SECOND_NS)
+
+    assert (closed[0].start_quality, closed[0].end_quality) == ("unknown", "service_stopped")
+    assert (closed[0].start_wall_ns, closed[0].duration_ns) == (SERVICE_START_WALL_NS, None)
+
+
+def test_shutdown_closes_both_signals_dispense_first() -> None:
+    tank = build_tank()
+    feed(tank, False, False, 1)
+    feed(tank, True, True, 2)
+
+    closed = tank.on_shutdown(2_004 * SECOND_NS, 4 * SECOND_NS)
+
+    assert [item.kind for item in closed] == ["dispense", "refill"]
+
+
+def test_shutdown_without_open_events_closes_nothing() -> None:
+    tank = build_tank()
+    feed(tank, False, False, 1)
+
+    assert tank.on_shutdown(2_004 * SECOND_NS, 4 * SECOND_NS) == []
+
+
+def test_shutdown_after_loss_closes_nothing() -> None:
+    tank = build_tank()
+    feed(tank, False, False, 1)
+    feed(tank, True, False, 2)
+    tank.on_signals_lost(2_004 * SECOND_NS, 4 * SECOND_NS)
+
+    assert tank.on_shutdown(2_004 * SECOND_NS, 4 * SECOND_NS) == []

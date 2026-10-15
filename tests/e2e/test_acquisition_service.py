@@ -29,6 +29,8 @@ SHUTDOWN_TIMEOUT_S = 10.0
 SCENARIO_TIMEOUT_S = 20.0
 RECONNECT_DELAY_S = 1.0
 SCENARIO_NAME = "dispense-short"
+LIFECYCLE_SCENARIO_NAME = "refill-single"
+SECOND_RUN = 2
 MIN_ROWS = 3
 IDLE_RUN_SECONDS = 2.5
 TIMING_JITTER_S = 0.5
@@ -67,6 +69,10 @@ class Service:
                 entries.append(entry)
         return entries
 
+    def kill(self) -> None:
+        self.process.kill()
+        self.process.wait(SHUTDOWN_TIMEOUT_S)
+
     def terminate(self) -> int:
         self.process.send_signal(signal.SIGTERM)
         try:
@@ -85,9 +91,9 @@ def write_shared_config(directory: Path, database_url: str) -> None:
     )
 
 
-def write_acquisition_config(directory: Path, link_dir: Path) -> None:
+def write_acquisition_config(directory: Path, link_dir: Path, scenario_name: str) -> None:
     config = acquisition_config(
-        SCENARIOS[SCENARIO_NAME].layout, link_dir, reconnect_delay_s=RECONNECT_DELAY_S
+        SCENARIOS[scenario_name].layout, link_dir, reconnect_delay_s=RECONNECT_DELAY_S
     )
     (directory / "acquisition.toml").write_text(render_acquisition_toml(config), encoding="utf-8")
 
@@ -100,12 +106,17 @@ def e2e_database(fresh_database: str) -> str:
     return fresh_database
 
 
-def start_service(tmp_path: Path, database_url: str, link_dir: Path) -> Service:
+def write_service_config(
+    tmp_path: Path, database_url: str, link_dir: Path, scenario_name: str = SCENARIO_NAME
+) -> Path:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     write_shared_config(config_dir, database_url)
-    write_acquisition_config(config_dir, link_dir)
-    output_path = tmp_path / "service.log"
+    write_acquisition_config(config_dir, link_dir, scenario_name)
+    return config_dir
+
+
+def launch_service(config_dir: Path, output_path: Path) -> Service:
     environment = {**os.environ, "DMS_CONFIG_DIR": str(config_dir), "PGPASSWORD": ROLE_PASSWORD}
     with output_path.open("w", encoding="utf-8") as output:
         process = subprocess.Popen(
@@ -116,6 +127,11 @@ def start_service(tmp_path: Path, database_url: str, link_dir: Path) -> Service:
             text=True,
         )
     return Service(process, output_path)
+
+
+def start_service(tmp_path: Path, database_url: str, link_dir: Path) -> Service:
+    config_dir = write_service_config(tmp_path, database_url, link_dir)
+    return launch_service(config_dir, tmp_path / "service.log")
 
 
 def poll_until(condition_met: Callable[[], bool], timeout_s: float, failure_message: str) -> None:
@@ -241,6 +257,100 @@ def assert_dispense_event_stored(database_url: str, service: Service, scenario: 
     assert len(service.events("event.completed")) == 1
     assert not service.events("event.incomplete")
     assert not service.events("event.orphaned")
+
+
+def event_rows(database_url: str) -> list[TupleRow]:
+    return query(
+        database_url,
+        "SELECT run_id, status, start_quality, end_quality, start_at, end_at, end_value_kg,"
+        " duration_ms FROM dms.tank_event ORDER BY start_at, id",
+    )
+
+
+def test_service_closes_events_after_a_crash_and_when_stopped(
+    tmp_path: Path, e2e_database: str
+) -> None:
+    runner = SimulationRunner(SCENARIOS[LIFECYCLE_SCENARIO_NAME], tmp_path / "ports")
+    runner.open()
+    runner.start()
+    config_dir = write_service_config(
+        tmp_path, e2e_database, tmp_path / "ports", LIFECYCLE_SCENARIO_NAME
+    )
+    first = launch_service(config_dir, tmp_path / "first.log")
+    second: Service | None = None
+
+    try:
+        poll_until(
+            lambda: len(query(e2e_database, "SELECT 1 FROM dms.meter_reading")) >= 1,
+            STARTUP_TIMEOUT_S,
+            f"the service stored no readings\n{first.output()}",
+        )
+        runner.start_scenario()
+        poll_until(
+            lambda: (
+                query(
+                    e2e_database,
+                    "SELECT 1 FROM dms.tank_event WHERE status = 'in_progress'"
+                    " AND start_quality = 'fresh'",
+                )
+                != []
+            ),
+            SCENARIO_TIMEOUT_S,
+            f"the refill did not start\n{first.output()}",
+        )
+        first.kill()
+
+        second = launch_service(config_dir, tmp_path / "second.log")
+        poll_until(
+            lambda: (
+                len(query(e2e_database, "SELECT 1 FROM dms.run")) == SECOND_RUN
+                and query(
+                    e2e_database,
+                    "SELECT 1 FROM dms.tank_event WHERE start_quality = 'unknown'",
+                )
+                != []
+            ),
+            STARTUP_TIMEOUT_S + SCENARIO_TIMEOUT_S,
+            f"the restart did not create an orphaned event\n{second.output()}",
+        )
+
+        crashed_rows = event_rows(e2e_database)
+        exit_code = second.terminate()
+    finally:
+        first.process.kill()
+        if second is not None:
+            second.process.kill()
+        runner.stop()
+
+    assert exit_code == 0, second.output()
+
+    first_run_id, second_run_id = (
+        row[0] for row in query(e2e_database, "SELECT id FROM dms.run ORDER BY id")
+    )
+    (crashed, orphaned_in_progress) = crashed_rows
+    assert crashed[:4] == (first_run_id, "incomplete", "fresh", "service_crashed")
+    assert crashed[4] <= crashed[5]
+    assert (crashed[6], crashed[7]) == (None, None)
+
+    assert orphaned_in_progress[:4] == (second_run_id, "in_progress", "unknown", None)
+    started_second_run_at = query(
+        e2e_database, f"SELECT started_at FROM dms.run WHERE id = {second_run_id}"
+    )[0][0]
+    assert crashed[5] < started_second_run_at
+    assert len(second.events("event.crash_closed")) == 1
+
+    stopped = event_rows(e2e_database)[1]
+    assert stopped[:4] == (second_run_id, "incomplete", "unknown", "service_stopped")
+    assert stopped[5] > started_second_run_at
+    assert (stopped[6], stopped[7]) == (None, None)
+
+    assert query(e2e_database, "SELECT id, stopped_at IS NOT NULL FROM dms.run ORDER BY id") == [
+        (first_run_id, False),
+        (second_run_id, True),
+    ]
+    assert [entry["end_quality"] for entry in second.events("event.incomplete")] == [
+        "service_stopped"
+    ]
 
 
 def test_service_runs_without_meter_and_stops_cleanly(tmp_path: Path, e2e_database: str) -> None:

@@ -294,3 +294,45 @@ def test_silo_without_tanks_never_reports_stale_signals() -> None:
 
     assert silo.on_tick(tick(100.0)) == []
     assert silo.signals_stale_since_mono_ns is None
+
+
+def test_shutdown_closes_the_open_event_at_the_last_snapshot() -> None:
+    silo = build_silo(1, tank_ids=(1,))
+    silo.on_signals(signals_at(9.0))
+    silo.on_reading(reading(10.0, 500))
+    silo.on_signals(signals_at(10.0, dispense=True))
+    silo.on_signals(signals_at(10.25, dispense=True))
+
+    closed = silo.on_shutdown()
+
+    assert closed == [
+        ClosedEvent(
+            UUID(int=1),
+            1,
+            "dispense",
+            1_010 * SECOND_NS,
+            500,
+            1_000 * SECOND_NS + 10_250_000_000,
+            None,
+            250_000_000,
+            "fresh",
+            "service_stopped",
+        )
+    ]
+
+
+def test_shutdown_before_any_snapshot_closes_nothing() -> None:
+    assert build_silo(1, tank_ids=(1,)).on_shutdown() == []
+
+
+def test_shutdown_after_lost_signals_closes_nothing() -> None:
+    silo = build_silo(1, tank_ids=(1,))
+    silo.on_signals(signals_at(9.0))
+    silo.on_signals(signals_at(10.0, dispense=True))
+    silo.on_tick(tick(12.0))
+
+    assert silo.on_shutdown() == []
+
+
+def test_silo_without_tanks_closes_nothing_on_shutdown() -> None:
+    assert build_silo(1).on_shutdown() == []

@@ -1,10 +1,13 @@
 import contextlib
+import dataclasses
+import functools
 import queue
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import NamedTuple, Protocol
+from typing import Any, NamedTuple, Protocol
+from uuid import UUID
 
 import psycopg
 import structlog
@@ -51,8 +54,22 @@ UPSERT_EVENT_END_SQL = (
     " duration_ms = EXCLUDED.duration_ms"
 )
 
+CLOSE_REJECTED_EVENT_SQL = (
+    "UPDATE dms.tank_event SET status = 'incomplete', end_at = %s, end_quality = 'record_rejected',"
+    " end_value_kg = NULL, duration_ms = NULL"
+    " WHERE id = %s AND status = 'in_progress'"
+)
+
+FALLBACK_CLOSED = "closed"
+FALLBACK_NO_ROW = "no_row"
+FALLBACK_FAILED = "failed"
+
 
 class TransientStoreError(Exception):
+    pass
+
+
+class DataStoreError(Exception):
     pass
 
 
@@ -70,6 +87,8 @@ class WriteResult(NamedTuple):
 class RecordStore(Protocol):
     def write(self, records: Sequence[WriterRecord]) -> WriteResult: ...
 
+    def close_rejected_event(self, event: ClosedEvent) -> bool: ...
+
     def reconnect(self) -> None: ...
 
 
@@ -85,14 +104,27 @@ def _is_transient(error: psycopg.Error) -> bool:
     return isinstance(error, psycopg.OperationalError) and not isinstance(error, errors.DiskFull)
 
 
+def _is_data_error(error: psycopg.Error) -> bool:
+    return isinstance(error, psycopg.IntegrityError | psycopg.DataError)
+
+
 @contextlib.contextmanager
-def _transient_errors_translated() -> Iterator[None]:
+def _store_errors_translated() -> Iterator[None]:
     try:
         yield
     except psycopg.Error as error:
         if _is_transient(error):
             raise TransientStoreError(str(error)) from error
+        if _is_data_error(error):
+            raise DataStoreError(str(error)) from error
         raise
+
+
+def _record_fields(record: WriterRecord) -> dict[str, Any]:
+    fields = {field.name: getattr(record, field.name) for field in dataclasses.fields(record)}
+    return {
+        name: str(value) if isinstance(value, UUID) else value for name, value in fields.items()
+    }
 
 
 class PostgresRecordStore:
@@ -121,7 +153,7 @@ class PostgresRecordStore:
         ]
         end_rows = [self._end_row(record) for record in records if isinstance(record, ClosedEvent)]
         with (
-            _transient_errors_translated(),
+            _store_errors_translated(),
             self._connection.transaction(),
             self._connection.cursor() as cursor,
         ):
@@ -129,6 +161,17 @@ class PostgresRecordStore:
             self._execute_group(cursor, INSERT_EVENT_START_SQL, start_rows)
             self._execute_group(cursor, UPSERT_EVENT_END_SQL, end_rows)
         return WriteResult(meter_inserted, len(meter_rows))
+
+    def close_rejected_event(self, event: ClosedEvent) -> bool:
+        with (
+            _store_errors_translated(),
+            self._connection.transaction(),
+            self._connection.cursor() as cursor,
+        ):
+            cursor.execute(
+                CLOSE_REJECTED_EVENT_SQL, [timestamp_from_ns(event.end_wall_ns), event.event_id]
+            )
+            return cursor.rowcount == 1
 
     def _execute_group(
         self,
@@ -173,7 +216,7 @@ class PostgresRecordStore:
     def reconnect(self) -> None:
         with contextlib.suppress(psycopg.Error):
             self._connection.close()
-        with _transient_errors_translated():
+        with _store_errors_translated():
             self._connection = self._connect()
 
 
@@ -247,6 +290,64 @@ class Writer:
         return batch
 
     def _write_with_retry(self, batch: list[WriterRecord]) -> None:
+        try:
+            result = self._retrying(functools.partial(self._store.write, batch), len(batch))
+        except DataStoreError as error:
+            if len(batch) == 1:
+                self._reject(batch[0], error)
+            else:
+                self._write_one_by_one(batch)
+            return
+        self._log_skipped_readings(result)
+
+    def _write_one_by_one(self, batch: list[WriterRecord]) -> None:
+        meter_inserted = 0
+        meter_total = 0
+
+        for index, item in enumerate(batch):
+            remaining = len(batch) - index - 1
+            try:
+                result = self._retrying(functools.partial(self._store.write, [item]), 1)
+            except DataStoreError as error:
+                self._reject_keeping_count(item, error, remaining)
+                continue
+            except WriterAbandonedError as error:
+                raise WriterAbandonedError(error.lost_records + remaining) from error
+
+            meter_inserted += result.meter_inserted
+            meter_total += result.meter_total
+
+        self._log_skipped_readings(WriteResult(meter_inserted, meter_total))
+
+    def _reject_keeping_count(
+        self, item: WriterRecord, error: DataStoreError, remaining: int
+    ) -> None:
+        try:
+            self._reject(item, error)
+        except WriterAbandonedError as abandoned:
+            raise WriterAbandonedError(abandoned.lost_records + remaining) from abandoned
+
+    def _reject(self, item: WriterRecord, error: DataStoreError) -> None:
+        fallback = self._close_rejected_event(item) if isinstance(item, ClosedEvent) else None
+
+        fields: dict[str, Any] = {
+            "record_type": type(item).__name__,
+            "record": _record_fields(item),
+            "error": str(error),
+        }
+        if fallback is not None:
+            fields["fallback"] = fallback
+        self._logger.critical(events.DB_RECORD_REJECTED, **fields)
+
+    def _close_rejected_event(self, event: ClosedEvent) -> str:
+        try:
+            closed = self._retrying(functools.partial(self._store.close_rejected_event, event), 1)
+        except DataStoreError:
+            return FALLBACK_FAILED
+
+        return FALLBACK_CLOSED if closed else FALLBACK_NO_ROW
+
+    def _retrying[T](self, action: Callable[[], T], record_count: int) -> T:
         failed_since: float | None = None
         needs_reconnect = False
         while True:
@@ -254,21 +355,24 @@ class Writer:
                 if needs_reconnect:
                     self._store.reconnect()
                     needs_reconnect = False
-                result = self._store.write(batch)
+                outcome = action()
                 break
             except TransientStoreError as error:
                 if failed_since is None:
                     failed_since = self._monotonic()
                     self._logger.warning(
-                        events.DB_WRITE_ERROR, error=str(error), batch_size=len(batch)
+                        events.DB_WRITE_ERROR, error=str(error), batch_size=record_count
                     )
                 if self._stop_event.is_set():
-                    raise WriterAbandonedError(len(batch)) from error
+                    raise WriterAbandonedError(record_count) from error
                 needs_reconnect = True
                 self._wait(self._retry_delay_s)
         if failed_since is not None:
             outage_s = self._monotonic() - failed_since
             self._logger.info(events.DB_WRITE_RECOVERED, outage_s=outage_s)
+        return outcome
+
+    def _log_skipped_readings(self, result: WriteResult) -> None:
         if result.meter_inserted < result.meter_total:
             self._logger.warning(
                 events.DB_READINGS_SKIPPED,

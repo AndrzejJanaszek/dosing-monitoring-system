@@ -199,7 +199,7 @@ Each edge of an event has its own quality, so a defect at the start and a defect
 
 | status | meaning |
 |---|---|
-| `in_progress` | the signal is active; `end_quality` is empty (also left behind by a stopped or crashed service, see the known gap below) |
+| `in_progress` | the signal is active, or the service died and the next start has not closed the row yet (see below); `end_quality` is empty |
 | `completed` | both qualities are `fresh`; `start_value_kg`, `end_value_kg` and `duration_ms` are set |
 | `incomplete` | at least one quality is not `fresh`; the values that are available are stored anyway |
 
@@ -214,10 +214,15 @@ Each edge of an event has its own quality, so a defect at the start and a defect
 | `fresh` | a fresh meter reading at the end; `end_value_kg` is set |
 | `stale_reading` | no fresh meter reading at the end; `end_value_kg` is empty |
 | `signal_lost` | no signal snapshot arrived for `max_signal_age_s` while the event was open; it ends at the last fresh snapshot, `end_value_kg` is empty |
+| `service_stopped` | the service was stopped while the event was open; it ends at the last fresh signal snapshot, `end_value_kg` is empty |
+| `service_crashed` | the service died while the event was open; the next start closed the row, `end_at` is the last meter reading of the silo before that start (or `start_at` when there is none), `end_value_kg` and `duration_ms` are empty |
+| `record_rejected` | the database rejected the record that ended the event; the row was closed at the end time of that record, `end_value_kg` and `duration_ms` are empty |
 
-`service_stopped` and `service_crashed` exist in the `end_quality` enum for a later change. `engine.max_signal_age_s` (default 1 s) is the longest silence of the signals before the engine treats them as lost; it counts from the service start until the first snapshot.
+`engine.max_signal_age_s` (default 1 s) is the longest silence of the signals before the engine treats them as lost; it counts from the service start until the first snapshot.
 
-Known gap: an event still open when the service stops stays `in_progress` (the same after a crash); closing and cleaning up such rows comes with the shutdown and crash handling.
+On `SIGTERM` the engine handles the queued messages and then closes every open event as `service_stopped`. After a crash (`kill -9`, power loss, a crashed engine or writer thread) the rows stay `in_progress` until the next start, which closes them as `service_crashed` in the same transaction that registers the new run (`event.crash_closed`); `stopped_at` of the interrupted run stays empty. If the signal is still active after the restart, the new run starts a separate `unknown` event, so one physical event can appear as two rows.
+
+A record the database rejects (a constraint violation or a value out of range) does not stop the writer: the rest of the batch is written, and the record is logged in full as `db.record_rejected` (`CRITICAL`) and dropped. Other database errors still stop the service.
 
 The simulator package can compute the events a scenario should produce from its samples (`dms.simulator.expected_events`); `tests/integration/test_event_scenarios.py` runs the whole catalog through the handlers and the engine and compares the result.
 

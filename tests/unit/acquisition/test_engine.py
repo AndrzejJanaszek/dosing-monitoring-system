@@ -1,6 +1,7 @@
 import queue
 import threading
 
+import pytest
 from structlog.testing import capture_logs
 
 from dms.acquisition.engine import Engine
@@ -252,3 +253,76 @@ def test_handle_processes_a_message_without_the_queue() -> None:
     engine.handle(Tick(0, SECOND_NS + 1))
 
     assert records(out_queue) == [MeterRecord(1, 5, 100)]
+
+
+def build_stopping_engine() -> tuple[
+    Engine, queue.Queue[EngineMessage], queue.Queue[WriterRecord], threading.Event
+]:
+    in_queue: queue.Queue[EngineMessage] = queue.Queue()
+    out_queue: queue.Queue[WriterRecord] = queue.Queue()
+    stop_event = threading.Event()
+    engine = Engine(
+        in_queue=in_queue,
+        out_queue=out_queue,
+        silos_by_meter={"m1": build_silo(1, tank_ids=(1,))},
+        stop_event=stop_event,
+    )
+    return engine, in_queue, out_queue, stop_event
+
+
+def test_stop_closes_open_events_after_handling_the_queued_messages() -> None:
+    engine, in_queue, out_queue, stop_event = build_stopping_engine()
+    in_queue.put(MeterReading("m1", 500, 0, 9 * SECOND_NS))
+    in_queue.put(signals_message(9.5, dispense=False))
+    in_queue.put(signals_message(10.0, dispense=True))
+    in_queue.put(signals_message(10.5, dispense=True))
+    stop_event.set()
+
+    with capture_logs() as logs:
+        engine.run()
+
+    started, closed = [item for item in records(out_queue) if not isinstance(item, MeterRecord)]
+    assert isinstance(started, StartedEvent)
+    assert isinstance(closed, ClosedEvent)
+    assert (closed.end_quality, closed.end_wall_ns, closed.duration_ns) == (
+        "service_stopped",
+        round(10.5 * SECOND_NS),
+        round(0.5 * SECOND_NS),
+    )
+    (incomplete,) = [entry for entry in logs if entry["event"] == events.EVENT_INCOMPLETE]
+    assert incomplete["log_level"] == "error"
+    assert (incomplete["start_quality"], incomplete["end_quality"]) == ("fresh", "service_stopped")
+
+
+def test_stop_without_open_events_writes_nothing() -> None:
+    engine, in_queue, out_queue, stop_event = build_stopping_engine()
+    in_queue.put(signals_message(9.5, dispense=False))
+    stop_event.set()
+
+    engine.run()
+
+    assert records(out_queue) == []
+
+
+def test_crash_of_the_engine_closes_no_open_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine, in_queue, out_queue, _ = build_stopping_engine()
+    in_queue.put(MeterReading("m1", 500, 0, 9 * SECOND_NS))
+    in_queue.put(signals_message(9.5, dispense=False))
+    in_queue.put(signals_message(10.0, dispense=True))
+    in_queue.put(Tick(0, 11 * SECOND_NS))
+    handle = engine.handle
+    handled: list[EngineMessage] = []
+
+    def handle_until_crash(message: EngineMessage) -> None:
+        if isinstance(message, Tick):
+            raise RuntimeError("engine crashed")
+        handled.append(message)
+        handle(message)
+
+    monkeypatch.setattr(engine, "handle", handle_until_crash)
+
+    with pytest.raises(RuntimeError, match="engine crashed"):
+        engine.run()
+
+    assert len(handled) == 3
+    assert [item for item in records(out_queue) if isinstance(item, ClosedEvent)] == []

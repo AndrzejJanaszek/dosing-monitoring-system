@@ -10,22 +10,42 @@ from structlog.testing import capture_logs
 from dms.domain.events import ClosedEvent, StartedEvent
 from dms.domain.records import MeterRecord, WriterRecord
 from dms.logs import events
-from dms.persistence.writer import TransientStoreError, Writer, WriteResult
+from dms.persistence.writer import DataStoreError, TransientStoreError, Writer, WriteResult
 
 
 class FakeStore:
-    def __init__(self, failures: list[Exception] | None = None, duplicates: int = 0) -> None:
+    def __init__(
+        self,
+        failures: list[Exception] | None = None,
+        duplicates: int = 0,
+        poison: Sequence[WriterRecord] = (),
+        close_outcomes: list[bool | Exception] | None = None,
+    ) -> None:
         self.failures = failures if failures is not None else []
         self.duplicates = duplicates
+        self.poison = list(poison)
+        self.close_outcomes = close_outcomes if close_outcomes is not None else []
         self.batches: list[list[WriterRecord]] = []
+        self.closed_rejected: list[ClosedEvent] = []
         self.reconnects = 0
 
     def write(self, records: Sequence[WriterRecord]) -> WriteResult:
         if self.failures:
             raise self.failures.pop(0)
+        if any(item in self.poison for item in records):
+            raise DataStoreError("constraint violated")
         self.batches.append(list(records))
         meter_total = sum(isinstance(item, MeterRecord) for item in records)
         return WriteResult(meter_total - self.duplicates, meter_total)
+
+    def close_rejected_event(self, event: ClosedEvent) -> bool:
+        if self.failures:
+            raise self.failures.pop(0)
+        self.closed_rejected.append(event)
+        outcome = self.close_outcomes.pop(0) if self.close_outcomes else True
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
     def reconnect(self) -> None:
         self.reconnects += 1
@@ -239,3 +259,174 @@ def test_batch_of_only_events_logs_no_skipped_readings(
     writer.step()
 
     assert logs == []
+
+
+def test_record_rejected_by_the_database_is_skipped_and_the_rest_of_the_batch_is_written(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[record(2)])
+    writer, in_queue, _ = build(store)
+    for index in range(4):
+        in_queue.put(record(index))
+
+    writer.step()
+
+    assert store.batches == [[record(0)], [record(1)], [record(3)]]
+    (rejected,) = logs
+    assert rejected["event"] == events.DB_RECORD_REJECTED
+    assert rejected["log_level"] == "critical"
+    assert rejected["record_type"] == "MeterRecord"
+    assert rejected["record"] == {"silo_id": 1, "wall_ns": 2, "value_kg": 2}
+    assert rejected["error"] == "constraint violated"
+    assert "fallback" not in rejected
+
+
+def test_next_batch_is_written_normally_after_a_rejected_record() -> None:
+    store = FakeStore(poison=[record(1)])
+    writer, in_queue, _ = build(store, max_batch=2)
+    for index in range(4):
+        in_queue.put(record(index))
+
+    writer.step()
+    writer.step()
+
+    assert store.batches == [[record(0)], [record(2), record(3)]]
+
+
+def test_single_rejected_record_is_logged_and_dropped(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[record(1)])
+    writer, in_queue, _ = build(store)
+    in_queue.put(record(1))
+
+    writer.step()
+
+    assert store.batches == []
+    assert [entry["event"] for entry in logs] == [events.DB_RECORD_REJECTED]
+
+
+def test_rejected_event_end_closes_the_row_as_a_fallback(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[closed_event()])
+    writer, in_queue, _ = build(store)
+    for item in (record(1), closed_event(), record(2)):
+        in_queue.put(item)
+
+    writer.step()
+
+    assert store.batches == [[record(1)], [record(2)]]
+    assert store.closed_rejected == [closed_event()]
+    (rejected,) = logs
+    assert rejected["record_type"] == "ClosedEvent"
+    assert rejected["record"]["event_id"] == str(UUID(int=1))
+    assert rejected["fallback"] == "closed"
+
+
+def test_rejected_event_end_without_a_row_in_progress_is_only_logged(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[closed_event()], close_outcomes=[False])
+    writer, in_queue, _ = build(store)
+    in_queue.put(closed_event())
+
+    writer.step()
+
+    assert logs[0]["fallback"] == "no_row"
+
+
+def test_rejected_event_end_whose_fallback_is_rejected_too_is_only_logged(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[closed_event()], close_outcomes=[DataStoreError("again")])
+    writer, in_queue, _ = build(store)
+    in_queue.put(closed_event())
+    in_queue.put(record(1))
+
+    writer.step()
+
+    assert store.batches == [[record(1)]]
+    assert [entry["fallback"] for entry in logs if "fallback" in entry] == ["failed"]
+    assert [entry["event"] for entry in logs] == [events.DB_RECORD_REJECTED]
+
+
+def test_rejected_started_event_is_logged_without_fallback(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[started_event()])
+    writer, in_queue, _ = build(store)
+    in_queue.put(started_event())
+    in_queue.put(record(1))
+
+    writer.step()
+
+    assert store.closed_rejected == []
+    assert logs[0]["record_type"] == "StartedEvent"
+    assert "fallback" not in logs[0]
+
+
+def test_transient_error_while_writing_one_by_one_retries_the_record_it_hit() -> None:
+    store = FakeStore(poison=[record(1)])
+    writer, in_queue, _ = build(store)
+    in_queue.put(record(0))
+    in_queue.put(record(1))
+    in_queue.put(record(2))
+    store.failures.extend([DataStoreError("batch"), TransientStoreError("down")])
+
+    writer.step()
+
+    assert store.batches == [[record(0)], [record(2)]]
+    assert store.reconnects == 1
+
+
+def test_skipped_readings_are_logged_once_per_original_batch(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(poison=[record(2)], duplicates=1)
+    writer, in_queue, _ = build(store)
+    for index in range(4):
+        in_queue.put(record(index))
+
+    writer.step()
+
+    skipped = [entry for entry in logs if entry["event"] == events.DB_READINGS_SKIPPED]
+    assert len(skipped) == 1
+    assert (skipped[0]["skipped"], skipped[0]["batch_size"]) == (3, 3)
+
+
+def test_stop_during_outage_while_writing_one_by_one_counts_the_remaining_records(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore()
+    in_queue: queue.Queue[WriterRecord] = queue.Queue()
+    stop_event = threading.Event()
+    writer = Writer(
+        in_queue=in_queue,
+        store=store,
+        stop_event=stop_event,
+        retry_delay_s=0,
+        wait=lambda _seconds: False,
+    )
+    for index in range(5):
+        in_queue.put(record(index))
+    store.failures.extend([DataStoreError("batch"), TransientStoreError("down")])
+    stop_event.set()
+
+    writer.run()
+
+    assert not writer.flushed
+    assert store.batches == []
+    abandoned = [entry for entry in logs if entry["event"] == events.WRITER_ABANDONED]
+    assert abandoned[0]["lost_records"] == 5
+
+
+def test_programming_error_while_writing_one_by_one_is_still_fatal() -> None:
+    store = FakeStore()
+    writer, in_queue, _ = build(store)
+    in_queue.put(record(0))
+    in_queue.put(record(1))
+    store.failures.extend([DataStoreError("batch"), RuntimeError("syntax")])
+
+    with pytest.raises(RuntimeError, match="syntax"):
+        writer.step()

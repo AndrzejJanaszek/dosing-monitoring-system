@@ -4,7 +4,7 @@ from uuid import UUID
 
 type EventKind = Literal["dispense", "refill"]
 type StartQuality = Literal["fresh", "stale_reading", "unknown"]
-type EndQuality = Literal["fresh", "stale_reading", "signal_lost"]
+type EndQuality = Literal["fresh", "stale_reading", "signal_lost", "service_stopped"]
 
 
 @dataclass(frozen=True, slots=True)
