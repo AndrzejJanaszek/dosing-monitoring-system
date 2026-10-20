@@ -10,6 +10,7 @@ from dms.acquisition.arduino.frames import (
 )
 from dms.simulator.catalog import ONE_TANK_WITH_SENSORS
 from dms.simulator.encoders import banner_lines, encode_pins_frame, encode_temperatures_frame
+from dms.simulator.timeline import SimulatedReading
 
 
 @pytest.mark.parametrize(
@@ -188,7 +189,9 @@ def test_non_ascii_digits_in_pin_keys_are_rejected() -> None:
 
 def test_simulator_frames_are_understood() -> None:
     pins = encode_pins_frame(((4, 0), (5, 1))).removesuffix(b"\r\n")
-    temperatures = encode_temperatures_frame((("28A8F126AB240B1C", 21.5),)).removesuffix(b"\r\n")
+    temperatures = encode_temperatures_frame(
+        (SimulatedReading("28A8F126AB240B1C", 21.5, None),)
+    ).removesuffix(b"\r\n")
 
     assert parse_board_line(pins) == PinLevels({4: 0, 5: 1})
     assert parse_board_line(temperatures) == TemperaturesFrame(

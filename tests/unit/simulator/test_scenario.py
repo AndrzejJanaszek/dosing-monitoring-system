@@ -3,7 +3,15 @@ from collections.abc import Callable
 import pytest
 
 from dms.simulator.errors import ScenarioError
-from dms.simulator.layout import MeterDevice, PlantLayout, SiloLayout
+from dms.simulator.layout import (
+    MeterDevice,
+    Missing,
+    PlantLayout,
+    SensorFault,
+    SignalBoard,
+    SiloLayout,
+    TemperatureSensor,
+)
 from dms.simulator.scenario import Scenario
 from dms.simulator.scenario_model import Dispense, Refill, SimulatedTankEvent
 from dms.units import NS_PER_S
@@ -36,6 +44,21 @@ def test_explicit_duration_and_start_mass_are_used() -> None:
 
 def test_scenario_without_events_needs_explicit_duration() -> None:
     assert scenario_with(duration_s=30).duration_ns == 30 * NS_PER_S
+
+
+def idle_with_fault(end_s: float) -> Scenario:
+    sensor = TemperatureSensor(
+        id=1,
+        address="28A8F126AB240B1C",
+        start_c=20.0,
+        faults=(SensorFault(start_s=1.0, end_s=end_s, kind=Missing()),),
+    )
+    layout = PlantLayout(two_tank_layout().silos, SignalBoard(sensors=(sensor,)))
+    return scenario_with(layout=layout, duration_s=30)
+
+
+def test_sensor_fault_may_last_until_the_end_of_the_scenario() -> None:
+    assert idle_with_fault(30.0).duration_ns == 30 * NS_PER_S
 
 
 INVALID_SCENARIOS: dict[str, tuple[Callable[[], object], str]] = {
@@ -94,6 +117,10 @@ INVALID_SCENARIOS: dict[str, tuple[Callable[[], object], str]] = {
     "duration-before-last-event": (
         lambda: scenario_with(dispense(), duration_s=30),
         "ends before the last event",
+    ),
+    "sensor-fault-after-the-end": (
+        lambda: idle_with_fault(30.5),
+        "board.sensors[0].faults[0]: ends after the scenario",
     ),
     "duration-missing": (scenario_with, "required when there are no events"),
     "mass-does-not-fit-division": (

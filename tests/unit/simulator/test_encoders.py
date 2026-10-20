@@ -8,7 +8,7 @@ from dms.simulator.encoders import (
     encode_temperatures_frame,
 )
 from dms.simulator.layout import SignalBoard, TemperatureSensor
-from dms.simulator.timeline import MeterSample, PinsSample, TemperaturesSample
+from dms.simulator.timeline import MeterSample, PinsSample, SimulatedReading, TemperaturesSample
 from tests.unit.simulator.builders import one_tank_layout
 
 
@@ -19,10 +19,21 @@ def test_pins_frame_matches_firmware_output() -> None:
 
 
 def test_temperatures_frame_matches_firmware_output() -> None:
-    readings = (("28A8F126AB240B1C", 25.44), ("28FF4A7C61160398", 25.4))
+    readings = (
+        SimulatedReading("28A8F126AB240B1C", 25.44, None),
+        SimulatedReading("28FF4A7C61160398", 25.4, None),
+    )
 
     assert encode_temperatures_frame(readings) == (
         b'{"temps":[{"a":"28A8F126AB240B1C","t":25.44},{"a":"28FF4A7C61160398","t":25.40}]}\r\n'
+    )
+
+
+def test_temperatures_frame_with_an_error_code_has_a_null_value() -> None:
+    readings = (SimulatedReading("28A8F126AB240B1C", None, "read_failed"),)
+
+    assert encode_temperatures_frame(readings) == (
+        b'{"temps":[{"a":"28A8F126AB240B1C","t":null,"e":"read_failed"}]}\r\n'
     )
 
 
@@ -47,8 +58,8 @@ def test_banner_with_two_sensors() -> None:
     board = SignalBoard(
         pins=(4, 5),
         sensors=(
-            TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=21.5),
-            TemperatureSensor(id=2, address="28FF4A7C61160398", temperature_c=22.25),
+            TemperatureSensor(id=1, address="28A8F126AB240B1C", start_c=21.5),
+            TemperatureSensor(id=2, address="28FF4A7C61160398", start_c=22.25),
         ),
     )
 

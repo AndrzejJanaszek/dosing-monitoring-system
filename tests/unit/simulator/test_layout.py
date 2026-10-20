@@ -4,9 +4,13 @@ import pytest
 
 from dms.simulator.errors import ScenarioError
 from dms.simulator.layout import (
+    ErrorCode,
+    FixedValue,
     Input,
     MeterDevice,
+    Missing,
     PlantLayout,
+    SensorFault,
     SignalBoard,
     SiloLayout,
     TemperatureSensor,
@@ -29,6 +33,11 @@ def test_silo_names_and_meter_ids() -> None:
     assert SiloLayout(id=3, tanks=(tank(1, 4, 5),)).display_name == "Silos 3"
     assert SiloLayout(id=3, tanks=(tank(1, 4, 5),), name="Cement").display_name == "Cement"
     assert SiloLayout(id=3, tanks=(tank(1, 4, 5),)).meter_id == "meter-3"
+
+
+def sensor_with_faults(*faults: SensorFault) -> PlantLayout:
+    sensor = TemperatureSensor(id=1, address="28A8F126AB240B1C", start_c=20.0, faults=faults)
+    return PlantLayout(one_tank_layout().silos, SignalBoard(sensors=(sensor,)))
 
 
 INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
@@ -73,7 +82,7 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
     "sensor-address-malformed": (
         lambda: PlantLayout(
             one_tank_layout().silos,
-            SignalBoard(sensors=(TemperatureSensor(id=1, address="28a8", temperature_c=20.0),)),
+            SignalBoard(sensors=(TemperatureSensor(id=1, address="28a8", start_c=20.0),)),
         ),
         "board.sensors[0].address",
     ),
@@ -82,8 +91,8 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
             one_tank_layout().silos,
             SignalBoard(
                 sensors=(
-                    TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=20.0),
-                    TemperatureSensor(id=2, address="28A8F126AB240B1C", temperature_c=21.0),
+                    TemperatureSensor(id=1, address="28A8F126AB240B1C", start_c=20.0),
+                    TemperatureSensor(id=2, address="28A8F126AB240B1C", start_c=21.0),
                 )
             ),
         ),
@@ -94,8 +103,8 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
             one_tank_layout().silos,
             SignalBoard(
                 sensors=(
-                    TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=20.0),
-                    TemperatureSensor(id=1, address="28FF4A7C61160398", temperature_c=21.0),
+                    TemperatureSensor(id=1, address="28A8F126AB240B1C", start_c=20.0),
+                    TemperatureSensor(id=1, address="28FF4A7C61160398", start_c=21.0),
                 )
             ),
         ),
@@ -105,7 +114,7 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
         lambda: PlantLayout(
             one_tank_layout().silos,
             SignalBoard(
-                sensors=(TemperatureSensor(id=0, address="28A8F126AB240B1C", temperature_c=20.0),)
+                sensors=(TemperatureSensor(id=0, address="28A8F126AB240B1C", start_c=20.0),)
             ),
         ),
         "board.sensors[0].id: 0 is outside",
@@ -115,9 +124,7 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
             one_tank_layout().silos,
             SignalBoard(
                 sensors=(
-                    TemperatureSensor(
-                        id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=9
-                    ),
+                    TemperatureSensor(id=1, address="28A8F126AB240B1C", start_c=20.0, silo_id=9),
                 )
             ),
         ),
@@ -127,9 +134,7 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
         lambda: PlantLayout(
             one_tank_layout().silos,
             SignalBoard(
-                sensors=(
-                    TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=20.0, leg=1),
-                )
+                sensors=(TemperatureSensor(id=1, address="28A8F126AB240B1C", start_c=20.0, leg=1),)
             ),
         ),
         "board.sensors[0].leg: leg requires a silo_id",
@@ -140,7 +145,7 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
             SignalBoard(
                 sensors=(
                     TemperatureSensor(
-                        id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=1, leg=0
+                        id=1, address="28A8F126AB240B1C", start_c=20.0, silo_id=1, leg=0
                     ),
                 )
             ),
@@ -153,12 +158,31 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
             SignalBoard(
                 sensors=(
                     TemperatureSensor(
-                        id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=1, leg=32768
+                        id=1, address="28A8F126AB240B1C", start_c=20.0, silo_id=1, leg=32768
                     ),
                 )
             ),
         ),
         "board.sensors[0].leg: 32768 is outside 1..32767",
+    ),
+    "fault-ends-before-it-starts": (
+        lambda: sensor_with_faults(SensorFault(start_s=5.0, end_s=5.0, kind=Missing())),
+        "board.sensors[0].faults[0]: end must be after",
+    ),
+    "fault-starts-before-zero": (
+        lambda: sensor_with_faults(SensorFault(start_s=-1.0, end_s=5.0, kind=Missing())),
+        "board.sensors[0].faults[0]: end must be after",
+    ),
+    "fault-with-empty-error-code": (
+        lambda: sensor_with_faults(SensorFault(start_s=1.0, end_s=5.0, kind=ErrorCode(""))),
+        "board.sensors[0].faults[0].kind: error code is empty",
+    ),
+    "overlapping-faults": (
+        lambda: sensor_with_faults(
+            SensorFault(start_s=1.0, end_s=5.0, kind=Missing()),
+            SensorFault(start_s=4.0, end_s=8.0, kind=FixedValue(85.0)),
+        ),
+        "board.sensors[0].faults[1]: overlaps another fault",
     ),
     "silo-id-out-of-range": (
         lambda: PlantLayout((SiloLayout(id=0, tanks=(tank(1, 4, 5),)),)),

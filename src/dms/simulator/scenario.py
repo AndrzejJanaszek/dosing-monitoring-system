@@ -19,6 +19,7 @@ class Scenario(ScenarioData):
             *_start_mass_errors(self),
             *_event_errors(self),
             *_duration_errors(self),
+            *_sensor_fault_errors(self),
         ]
         if not errors:
             errors = _mass_errors(self)
@@ -108,6 +109,16 @@ def _duration_errors(scenario: Scenario) -> list[str]:
             f"duration_s: {scenario.duration_s:g} s ends before the last event at {last_end_s:g} s"
         ]
     return []
+
+
+def _sensor_fault_errors(scenario: Scenario) -> list[str]:
+    return [
+        f"board.sensors[{sensor_index}].faults[{fault_index}]: ends after the scenario"
+        f" ({scenario.duration_ns / NS_PER_S:g} s)"
+        for sensor_index, sensor in enumerate(scenario.layout.board.sensors)
+        for fault_index, fault in enumerate(sensor.faults)
+        if fault.end_ns > scenario.duration_ns
+    ]
 
 
 def _mass_errors(scenario: Scenario) -> list[str]:
