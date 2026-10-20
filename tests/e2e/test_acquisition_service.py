@@ -30,6 +30,11 @@ SCENARIO_TIMEOUT_S = 20.0
 RECONNECT_DELAY_S = 1.0
 SCENARIO_NAME = "dispense-short"
 LIFECYCLE_SCENARIO_NAME = "refill-single"
+TEMPERATURE_SCENARIO_NAME = "temperatures-unknown-sensor"
+MIN_TEMPERATURE_ROWS = 6
+MIN_UNKNOWN_ROWS = 3
+TEMPERATURE_RISE_PER_S_C = 0.1
+TEMPERATURE_RISE_TOLERANCE_C = 0.12
 SECOND_RUN = 2
 MIN_ROWS = 3
 IDLE_RUN_SECONDS = 2.5
@@ -265,6 +270,71 @@ def event_rows(database_url: str) -> list[TupleRow]:
         "SELECT run_id, status, start_quality, end_quality, start_at, end_at, end_value_kg,"
         " duration_ms FROM dms.tank_event ORDER BY start_at, id",
     )
+
+
+@pytest.fixture
+def temperature_simulation(tmp_path: Path) -> Iterator[SimulationRunner]:
+    runner = SimulationRunner(SCENARIOS[TEMPERATURE_SCENARIO_NAME], tmp_path / "ports")
+    runner.open()
+    runner.start()
+    yield runner
+    runner.stop()
+
+
+def test_service_stores_rising_temperatures_and_readings_of_an_unknown_sensor(
+    tmp_path: Path, e2e_database: str, temperature_simulation: SimulationRunner
+) -> None:
+    config_dir = write_service_config(
+        tmp_path, e2e_database, tmp_path / "ports", TEMPERATURE_SCENARIO_NAME
+    )
+    service = launch_service(config_dir, tmp_path / "service.log")
+    try:
+        poll_until(
+            lambda: len(query(e2e_database, "SELECT 1 FROM dms.run")) == 1,
+            STARTUP_TIMEOUT_S,
+            f"service did not start\n{service.output()}",
+        )
+        temperature_simulation.start_scenario()
+        poll_until(
+            lambda: (
+                len(query(e2e_database, "SELECT 1 FROM dms.temperature_reading"))
+                >= MIN_TEMPERATURE_ROWS
+                and len(query(e2e_database, "SELECT 1 FROM dms.unknown_sensor_reading"))
+                >= MIN_UNKNOWN_ROWS
+            ),
+            SCENARIO_TIMEOUT_S,
+            f"the temperatures were not stored\n{service.output()}",
+        )
+    finally:
+        exit_code = service.terminate()
+
+    assert exit_code == 0, service.output()
+    sensors = query(
+        e2e_database, "SELECT id, silo_id, leg, name, active FROM dms.temperature_sensor"
+    )
+    assert sensors == [(1, 1, 1, "Czujnik 1", True)]
+    rows = query(
+        e2e_database,
+        "SELECT sensor_id, extract(epoch FROM t), value_c, error"
+        " FROM dms.temperature_reading ORDER BY t",
+    )
+    assert {row[0] for row in rows} == {1}
+    assert {row[3] for row in rows} == {None}
+    gaps_s = [float(later[1]) - float(earlier[1]) for earlier, later in itertools.pairwise(rows)]
+    assert all(0.7 <= gap <= 1.3 for gap in gaps_s), gaps_s
+    assert rows[-1][2] > rows[0][2]
+    rises = [float(later[2] - earlier[2]) for earlier, later in itertools.pairwise(rows)]
+    assert all(
+        -TEMPERATURE_RISE_TOLERANCE_C <= rise <= TEMPERATURE_RISE_PER_S_C * 2 for rise in rises
+    ), rises
+    unknown = query(e2e_database, "SELECT DISTINCT address, error FROM dms.unknown_sensor_reading")
+    assert unknown == [("28B3C41D5E6F7A80", None)]
+    assert len(service.events("temperature.unknown_sensor")) >= 1
+    assert not service.events("temperature.sensor_error")
+    (stored_config,) = query(e2e_database, "SELECT config FROM dms.run")[0]
+    assert [item["address"] for item in stored_config["temperature_sensors"]] == [
+        "28A8F126AB240B1C"
+    ]
 
 
 def test_service_closes_events_after_a_crash_and_when_stopped(
