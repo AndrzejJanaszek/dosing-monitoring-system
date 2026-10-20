@@ -13,7 +13,8 @@ from dms.simulator.catalog import (
     build_catalog,
 )
 from dms.simulator.dms_config import acquisition_config
-from dms.simulator.scenario import Dispense, Refill, Scenario
+from dms.simulator.scenario import Scenario
+from dms.simulator.scenario_model import Dispense, Refill
 
 EXPECTED_RELATIONS = {
     "dispense-before-refill": ("before",),

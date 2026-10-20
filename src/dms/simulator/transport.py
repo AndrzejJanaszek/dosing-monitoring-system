@@ -3,34 +3,42 @@ import pty
 import select
 import termios
 import threading
-import time
 import tty
 from collections.abc import Callable, Iterator, Mapping
 from functools import partial
 from pathlib import Path
 
-from dms.acquisition.clock import NS_PER_S
+from dms.clock import Clock, SystemClock
 from dms.simulator.encoders import encode_banner, encode_sample
 from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import Sample, samples_from
+from dms.units import NS_PER_S
 
 
 class PseudoTerminal:
     def __init__(self, link: Path | None = None, greeting: bytes = b"") -> None:
         self._master_fd, slave_fd = pty.openpty()
         tty.setraw(slave_fd)
-        self.path = Path(os.ttyname(slave_fd))
+        self._path = Path(os.ttyname(slave_fd))
         os.close(slave_fd)
         os.set_blocking(self._master_fd, False)
 
-        self.dropped_frames = 0
+        self._dropped_frames = 0
         self._greeting = greeting
         self._reader_connected = False
         self._link = link
         self._remainder = b""
         if link is not None:
             link.unlink(missing_ok=True)
-            link.symlink_to(self.path)
+            link.symlink_to(self._path)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def dropped_frames(self) -> int:
+        return self._dropped_frames
 
     def send(self, data: bytes) -> None:
         if not self._has_reader():
@@ -43,7 +51,7 @@ class PseudoTerminal:
 
         self._write_remainder()
         if self._remainder:
-            self.dropped_frames += 1
+            self._dropped_frames += 1
             return
         self._remainder = data
         self._write_remainder()
@@ -64,7 +72,7 @@ class PseudoTerminal:
         self._reader_connected = False
         self._remainder = b""
 
-        reader_side_fd = os.open(self.path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        reader_side_fd = os.open(self._path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         try:
             termios.tcflush(reader_side_fd, termios.TCIFLUSH)
         finally:
@@ -89,11 +97,11 @@ class SimulationRunner:
         self,
         scenario: Scenario,
         link_dir: Path | None = None,
-        now_ns: Callable[[], int] = time.monotonic_ns,
+        clock: Clock | None = None,
     ) -> None:
         self._scenario = scenario
         self._link_dir = link_dir
-        self._now_ns = now_ns
+        self._clock = clock if clock is not None else SystemClock()
         self._ports: dict[str, PseudoTerminal] = {}
 
         self._samples: Iterator[Sample]
@@ -124,7 +132,7 @@ class SimulationRunner:
             greeting = banner if device_id == board.id else b""
             self._ports[device_id] = PseudoTerminal(link, greeting)
 
-        self._restart_samples(self._now_ns(), _resting_time)
+        self._restart_samples(self._clock.mono_ns(), _resting_time)
 
     def start_scenario(self) -> None:
         self._start_requested.set()
@@ -142,7 +150,7 @@ class SimulationRunner:
             self._close_ports()
 
     def step(self) -> float:
-        now_ns = self._now_ns()
+        now_ns = self._clock.mono_ns()
         if self._start_requested.is_set() and not self._scenario_started:
             self._begin_scenario(now_ns)
 

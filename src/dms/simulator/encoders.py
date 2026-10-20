@@ -6,7 +6,9 @@ from dms.config.models import MeterFormat
 from dms.simulator.layout import PlantLayout, SignalBoard
 from dms.simulator.timeline import MeterSample, PinsSample, Sample, TemperaturesSample
 
-METER_ENCODERS: Mapping[MeterFormat, Callable[[int], bytes]] = {"dgtp": encode_dgtp_frame}
+METER_ENCODERS: Mapping[MeterFormat, Callable[[int], bytes]] = {
+    MeterFormat.DGTP: encode_dgtp_frame
+}
 
 BOARD_FRAME_END = b"\r\n"
 BOARD_JSON_SEPARATORS = (",", ":")

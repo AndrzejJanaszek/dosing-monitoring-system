@@ -1,10 +1,7 @@
 import queue
 import threading
-from collections.abc import Iterator, MutableMapping
+from collections.abc import MutableMapping
 from typing import Any
-
-import pytest
-from structlog.testing import capture_logs
 
 from dms.acquisition.meters.dgtp import encode_dgtp_frame, parse_dgtp_frame
 from dms.acquisition.meters.handler import MeterFrameHandler
@@ -102,18 +99,12 @@ class ConstantOutcomeHandler:
     def __init__(self, outcome: FrameOutcome) -> None:
         self._outcome = outcome
 
-    def handle(self, frame: bytes, wall_ns: int, mono_ns: int) -> FrameOutcome:
+    def handle(self, _frame: bytes, _wall_ns: int, _mono_ns: int) -> FrameOutcome:
         return self._outcome
 
 
 def event_names(logs: list[MutableMapping[str, Any]]) -> list[object]:
     return [entry["event"] for entry in logs]
-
-
-@pytest.fixture
-def logs() -> Iterator[list[MutableMapping[str, Any]]]:
-    with capture_logs() as captured:
-        yield captured
 
 
 def test_valid_frame_becomes_reading_with_clock_stamps(
@@ -125,7 +116,12 @@ def test_valid_frame_becomes_reading_with_clock_stamps(
     harness.steps(2)
 
     (reading,) = harness.readings()
-    assert reading == MeterReading("m1", 1020, harness.clock.wall_ns(), harness.clock.mono_ns())
+    assert reading == MeterReading(
+        meter_id="m1",
+        value_kg=1020,
+        wall_ns=harness.clock.wall_ns(),
+        mono_ns=harness.clock.mono_ns(),
+    )
     assert event_names(logs) == [events.PORT_OPENED]
 
 
@@ -258,7 +254,7 @@ def test_valid_frames_keep_the_port_open() -> None:
 
     for _ in range(5):
         harness.clock.advance(SILENCE_TIMEOUT_S - 1)
-        port._script.append(encode_dgtp_frame(10))
+        port.feed(encode_dgtp_frame(10))
         harness.steps(1)
 
     assert not port.closed

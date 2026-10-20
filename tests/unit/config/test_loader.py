@@ -266,7 +266,9 @@ def test_invalid_toml_is_a_readable_error(tmp_path: Path) -> None:
     assert raised.value.errors[0].startswith("shared.toml: invalid TOML:")
 
 
-def test_config_dir_comes_from_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_config_dir_comes_from_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv(CONFIG_DIR_VARIABLE, str(tmp_path))
     write(tmp_path, "shared.toml", VALID_SHARED)
 

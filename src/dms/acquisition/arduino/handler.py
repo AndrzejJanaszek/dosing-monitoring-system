@@ -16,11 +16,13 @@ from dms.logs import events
 from dms.messages import EngineMessage, SignalStates
 
 LOG_LEVELS: dict[BoardLogLevel, int] = {
-    "DEBUG": logging.DEBUG,
-    "INFO": logging.INFO,
-    "WARNING": logging.WARNING,
-    "ERROR": logging.ERROR,
+    BoardLogLevel.DEBUG: logging.DEBUG,
+    BoardLogLevel.INFO: logging.INFO,
+    BoardLogLevel.WARNING: logging.WARNING,
+    BoardLogLevel.ERROR: logging.ERROR,
 }
+
+logger = structlog.get_logger()
 
 
 class ArduinoFrameHandler:
@@ -34,7 +36,7 @@ class ArduinoFrameHandler:
     ) -> None:
         self._mapper = mapper
         self._out_queue = out_queue
-        self._logger = structlog.get_logger().bind(device_id=board_id, port=port_name)
+        self._logger = logger.bind(device_id=board_id, port=port_name)
         self._missing_pins: frozenset[int] = frozenset()
 
     def handle(self, frame: bytes, wall_ns: int, mono_ns: int) -> FrameOutcome:

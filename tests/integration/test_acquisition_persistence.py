@@ -10,16 +10,17 @@ import pytest
 from psycopg.rows import TupleRow
 from structlog.testing import capture_logs
 
-from dms.acquisition.startup import run_startup_sequence
+from dms.acquisition.startup import StartupError, run_startup_sequence
 from dms.config.models import (
     AcquisitionConfig,
     BoardConfig,
     InputConfig,
     MeterConfig,
+    MeterFormat,
     SiloConfig,
     TankConfig,
 )
-from dms.domain.events import ClosedEvent, StartedEvent
+from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import MeterRecord, WriterRecord
 from dms.logs import events
 from dms.persistence.catalog import (
@@ -31,12 +32,22 @@ from dms.persistence.catalog import (
     sync_tanks,
     tank_identity_violations,
 )
-from dms.persistence.connection import StartupError, connect_with_retry
-from dms.persistence.writer import DataStoreError, PostgresRecordStore, Writer, timestamp_from_ns
+from dms.persistence.connection import DatabaseUnreachableError, connect_with_retry
+from dms.persistence.record_store import DataStoreError, PostgresRecordStore, timestamp_from_ns
+from dms.persistence.writer import Writer
+from dms.units import NS_PER_S
 from tests.database import connect_as, migrate_as_owner
+from tests.fakes import ManualClock
 
 WRITER_ROLE = "dms_writer"
 BASE_NS = 1_700_000_000_123_456_000
+EVENT_ID = UUID(int=7)
+EVENT_START_NS = BASE_NS
+EVENT_END_NS = BASE_NS + 12_345_678_000
+EVENT_COLUMNS = (
+    "id, tank_id, type, origin, status, start_quality, end_quality,"
+    " start_at, start_value_kg, end_at, end_value_kg, duration_ms"
+)
 
 
 def silo(silo_id: int, name: str = "Silos") -> SiloConfig:
@@ -62,7 +73,7 @@ def acquisition_config(
             id=item.meter_id,
             port=f"/dev/fake{item.id}",
             baudrate=9600,
-            format="dgtp",
+            format=MeterFormat.DGTP,
             frame_end="\r\n",
             reconnect_delay_s=5.0,
             silence_timeout_s=5.0,
@@ -98,7 +109,9 @@ def writer_connection(fresh_database: str) -> psycopg.Connection[TupleRow]:
     return connection
 
 
-def build_store(database_url: str, connection: psycopg.Connection[TupleRow]) -> PostgresRecordStore:
+def build_store(
+    database_url: str, connection: psycopg.Connection[TupleRow]
+) -> PostgresRecordStore:
     sync_tanks(connection, [tank(1)])
     run_id = start_run(connection, "1.2.3", {})
     return PostgresRecordStore(connection, lambda: connect_as(database_url, WRITER_ROLE), run_id)
@@ -200,7 +213,7 @@ def test_store_writes_and_ignores_duplicates(
     fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
 ) -> None:
     store = build_store(fresh_database, writer_connection)
-    batch = [MeterRecord(1, BASE_NS, 100), MeterRecord(1, BASE_NS + 1_000_000_000, 120)]
+    batch = [MeterRecord(1, BASE_NS, 100), MeterRecord(1, BASE_NS + NS_PER_S, 120)]
 
     first = store.write(batch)
     second = store.write([*batch, MeterRecord(1, BASE_NS + 2_000_000_000, 140)])
@@ -312,21 +325,23 @@ def test_startup_sequence_refuses_database_without_migrations(
 
 
 def test_connect_with_retry_gives_up_after_timeout() -> None:
-    now = [0.0]
+    clock = ManualClock()
+    sleeps: list[float] = []
 
     def sleep(seconds: float) -> None:
-        now[0] += seconds
+        sleeps.append(seconds)
+        clock.advance(seconds)
 
-    with pytest.raises(StartupError, match="not reachable"):
+    with pytest.raises(DatabaseUnreachableError, match="not reachable"):
         connect_with_retry(
             "host=127.0.0.1 port=1 dbname=x user=y connect_timeout=1",
             timeout_s=3,
             retry_interval_s=1,
             sleep=sleep,
-            monotonic=lambda: now[0],
+            clock=clock,
         )
 
-    assert now[0] >= 2
+    assert sum(sleeps) >= 2
 
 
 def test_connect_with_retry_connects_when_database_is_up(fresh_database: str) -> None:
@@ -354,46 +369,54 @@ def test_writer_survives_terminated_connection(
     backend_pid = writer_connection.info.backend_pid
     with psycopg.connect(fresh_database, autocommit=True) as admin:
         admin.execute("SELECT pg_terminate_backend(%s)", [backend_pid])
-    in_queue.put(MeterRecord(1, BASE_NS + 1_000_000_000, 120))
+    in_queue.put(MeterRecord(1, BASE_NS + NS_PER_S, 120))
     captured: list[MutableMapping[str, Any]]
     with capture_logs() as captured:
         writer.step()
 
     with psycopg.connect(fresh_database) as reader:
-        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [(100,), (120,)]
+        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [
+            (100,),
+            (120,),
+        ]
     assert [entry["event"] for entry in captured] == [
         events.DB_WRITE_ERROR,
         events.DB_WRITE_RECOVERED,
     ]
 
 
-EVENT_ID = UUID(int=7)
-EVENT_START_NS = BASE_NS
-EVENT_END_NS = BASE_NS + 12_345_678_000
-EVENT_COLUMNS = (
-    "id, tank_id, type, origin, status, start_quality, end_quality,"
-    " start_at, start_value_kg, end_at, end_value_kg, duration_ms"
-)
-
-
 def started(event_id: UUID = EVENT_ID, *, orphaned: bool = False) -> StartedEvent:
     if orphaned:
-        return StartedEvent(event_id, 1, "dispense", EVENT_START_NS, None, "unknown")
-    return StartedEvent(event_id, 1, "dispense", EVENT_START_NS, 1000, "fresh")
+        return StartedEvent(
+            event_id=event_id,
+            tank_id=1,
+            kind=EventKind.DISPENSE,
+            start_wall_ns=EVENT_START_NS,
+            start_value_kg=None,
+            start_quality=StartQuality.UNKNOWN,
+        )
+    return StartedEvent(
+        event_id=event_id,
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=EVENT_START_NS,
+        start_value_kg=1000,
+        start_quality=StartQuality.FRESH,
+    )
 
 
 def closed(event_id: UUID = EVENT_ID, *, stale_end: bool = False) -> ClosedEvent:
     return ClosedEvent(
-        event_id,
-        1,
-        "dispense",
-        EVENT_START_NS,
-        1000,
-        EVENT_END_NS,
-        None if stale_end else 400,
-        12_345_678_000,
-        "fresh",
-        "stale_reading" if stale_end else "fresh",
+        event_id=event_id,
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=EVENT_START_NS,
+        start_value_kg=1000,
+        end_wall_ns=EVENT_END_NS,
+        end_value_kg=None if stale_end else 400,
+        duration_ns=12_345_678_000,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.STALE_READING if stale_end else EndQuality.FRESH,
     )
 
 
@@ -519,16 +542,16 @@ def test_orphaned_event_closed_by_lost_signals_keeps_both_qualities(
 ) -> None:
     store = build_store(fresh_database, writer_connection)
     lost = ClosedEvent(
-        EVENT_ID,
-        1,
-        "dispense",
-        EVENT_START_NS,
-        None,
-        EVENT_END_NS,
-        None,
-        None,
-        "unknown",
-        "signal_lost",
+        event_id=EVENT_ID,
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=EVENT_START_NS,
+        start_value_kg=None,
+        end_wall_ns=EVENT_END_NS,
+        end_value_kg=None,
+        duration_ns=None,
+        start_quality=StartQuality.UNKNOWN,
+        end_quality=EndQuality.SIGNAL_LOST,
     )
 
     store.write([started(orphaned=True), lost])
@@ -542,7 +565,16 @@ def test_batch_mixing_readings_and_events_is_one_transaction(
 ) -> None:
     store = build_store(fresh_database, writer_connection)
     violating = ClosedEvent(
-        UUID(int=9), 1, "dispense", BASE_NS, 1, BASE_NS, 1, -2_000_000, "fresh", "fresh"
+        event_id=UUID(int=9),
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=BASE_NS,
+        start_value_kg=1,
+        end_wall_ns=BASE_NS,
+        end_value_kg=1,
+        duration_ns=-2_000_000,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.FRESH,
     )
 
     with pytest.raises(DataStoreError):
@@ -558,16 +590,21 @@ def test_event_end_may_precede_start_on_the_wall_clock(
 ) -> None:
     store = build_store(fresh_database, writer_connection)
     stepped_back = ClosedEvent(
-        EVENT_ID, 1, "dispense", BASE_NS, 1, BASE_NS - 5_000_000_000, 1, 1000, "fresh", "fresh"
+        event_id=EVENT_ID,
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=BASE_NS,
+        start_value_kg=1,
+        end_wall_ns=BASE_NS - 5_000_000_000,
+        end_value_kg=1,
+        duration_ns=1000,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.FRESH,
     )
 
     store.write([stepped_back])
 
     assert len(event_rows(fresh_database)) == 1
-
-
-NS_PER_S = 1_000_000_000
-RESTART_CONFIG = acquisition_config([silo(1)], [tank(1)])
 
 
 def seed_run(connection: psycopg.Connection[TupleRow], started_at_ns: int) -> int:
@@ -619,14 +656,14 @@ def seed_event(
 
 @pytest.fixture
 def crashed_run(
-    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+    writer_connection: psycopg.Connection[TupleRow],
 ) -> tuple[psycopg.Connection[TupleRow], int]:
     sync_tanks(writer_connection, [tank(1)])
     return writer_connection, seed_run(writer_connection, BASE_NS)
 
 
 def restart(connection: psycopg.Connection[TupleRow]) -> int:
-    return run_startup_sequence(connection, RESTART_CONFIG)
+    return run_startup_sequence(connection, acquisition_config([silo(1)], [tank(1)]))
 
 
 def test_restart_closes_event_in_progress_at_the_last_reading_before_the_new_run(
@@ -737,7 +774,7 @@ def test_restart_keeps_the_end_of_an_older_event_inside_its_own_run(
 
 
 def test_restart_logs_the_closed_events_once(
-    fresh_database: str, crashed_run: tuple[psycopg.Connection[TupleRow], int]
+    crashed_run: tuple[psycopg.Connection[TupleRow], int],
 ) -> None:
     connection, run_id = crashed_run
     seed_event(connection, run_id, UUID(int=1), BASE_NS)
@@ -773,7 +810,16 @@ def test_batch_with_a_rejected_record_stores_the_other_records_and_keeps_going(
 ) -> None:
     writer, in_queue = build_writer(build_store(fresh_database, writer_connection))
     unknown_tank = ClosedEvent(
-        UUID(int=9), 99, "dispense", BASE_NS, 1, BASE_NS, 1, 1000, "fresh", "fresh"
+        event_id=UUID(int=9),
+        tank_id=99,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=BASE_NS,
+        start_value_kg=1,
+        end_wall_ns=BASE_NS,
+        end_value_kg=1,
+        duration_ns=1000,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.FRESH,
     )
     for item in (MeterRecord(1, BASE_NS, 100), started(), unknown_tank):
         in_queue.put(item)
@@ -784,7 +830,10 @@ def test_batch_with_a_rejected_record_stores_the_other_records_and_keeps_going(
     writer.step()
 
     with psycopg.connect(fresh_database) as reader:
-        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [(100,), (110,)]
+        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [
+            (100,),
+            (110,),
+        ]
     assert [row[4] for row in event_rows(fresh_database)] == ["in_progress"]
     (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
     assert rejected["log_level"] == "critical"
@@ -800,16 +849,16 @@ def test_rejected_event_end_closes_the_row_in_progress_as_record_rejected(
     writer, in_queue = build_writer(store)
     store.write([started()])
     violating = ClosedEvent(
-        EVENT_ID,
-        1,
-        "dispense",
-        EVENT_START_NS,
-        1000,
-        EVENT_END_NS,
-        400,
-        -2_000_000,
-        "fresh",
-        "fresh",
+        event_id=EVENT_ID,
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=EVENT_START_NS,
+        start_value_kg=1000,
+        end_wall_ns=EVENT_END_NS,
+        end_value_kg=400,
+        duration_ns=-2_000_000,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.FRESH,
     )
     in_queue.put(violating)
 
@@ -832,16 +881,16 @@ def test_rejected_event_end_does_not_touch_a_row_that_is_not_in_progress(
     store.write([started(), closed()])
     before = event_rows(fresh_database)
     violating = ClosedEvent(
-        EVENT_ID,
-        1,
-        "dispense",
-        EVENT_START_NS,
-        1000,
-        EVENT_END_NS,
-        400,
-        -2_000_000,
-        "fresh",
-        "fresh",
+        event_id=EVENT_ID,
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=EVENT_START_NS,
+        start_value_kg=1000,
+        end_wall_ns=EVENT_END_NS,
+        end_value_kg=400,
+        duration_ns=-2_000_000,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.FRESH,
     )
     in_queue.put(violating)
 

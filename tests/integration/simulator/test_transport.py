@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from dms.acquisition.clock import NS_PER_S
 from dms.acquisition.meters.dgtp import parse_dgtp_frame
 from dms.simulator.catalog import SCENARIOS
 from dms.simulator.timeline import MeterSample, scenario_samples
 from dms.simulator.transport import PseudoTerminal, SimulationRunner
+from dms.units import NS_PER_S
 
 READ_CHUNK_BYTES = 65536
 FRAME_TERMINATOR = b"\r\n"
@@ -26,7 +26,10 @@ class FakeClock:
     def __init__(self) -> None:
         self.now_ns = 0
 
-    def __call__(self) -> int:
+    def wall_ns(self) -> int:
+        return self.now_ns
+
+    def mono_ns(self) -> int:
         return self.now_ns
 
     def advance(self, seconds: float) -> None:
@@ -112,7 +115,7 @@ def test_meter_frames_match_the_scenario_samples(
 
 
 def test_banner_comes_before_the_first_pins_frame(
-    runner: SimulationRunner, clock: FakeClock, arduino: PortReader
+    runner: SimulationRunner, arduino: PortReader
 ) -> None:
     runner.step()
     arduino.drain()

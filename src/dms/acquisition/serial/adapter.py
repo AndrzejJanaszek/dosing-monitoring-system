@@ -6,14 +6,17 @@ from typing import Protocol
 
 import structlog
 
-from dms.acquisition.clock import NS_PER_S, Clock
 from dms.acquisition.serial.framing import Framer
+from dms.clock import Clock
 from dms.logs import events
+from dms.units import NS_PER_S
 
 FIRST_READ_BYTES = 1
 IDLE_WAIT_S = 0.1
 GARBAGE_LOG_EVERY = 100
 GARBAGE_PREVIEW_BYTES = 64
+
+logger = structlog.get_logger()
 
 
 class SerialPort(Protocol):
@@ -62,7 +65,7 @@ class SerialAdapter:
         self._reconnect_delay_ns = round(reconnect_delay_s * NS_PER_S)
         self._silence_timeout_ns = round(silence_timeout_s * NS_PER_S)
         self._wait = wait if wait is not None else stop_event.wait
-        self._logger = structlog.get_logger().bind(device_id=device_id, port=port_name)
+        self._logger = logger.bind(device_id=device_id, port=port_name)
         self._port: SerialPort | None = None
         self._next_open_attempt_ns = 0
         self._open_failure_logged = False

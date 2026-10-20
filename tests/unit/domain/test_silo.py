@@ -1,27 +1,28 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from dms.domain.events import ClosedEvent, StartedEvent
+from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import MeterRecord
 from dms.domain.tank import SignalChange
 from dms.messages import MeterReading, SignalStates, TankSignals, Tick
-from tests.unit.domain.builders import SECOND_NS, build_silo
+from dms.units import NS_PER_S
+from tests.unit.domain.builders import build_silo
 
 
 def reading(mono_s: float, value_kg: int) -> MeterReading:
-    mono_ns = round(mono_s * SECOND_NS)
-    return MeterReading("m1", value_kg, mono_ns + 1000, mono_ns)
+    mono_ns = round(mono_s * NS_PER_S)
+    return MeterReading(meter_id="m1", value_kg=value_kg, wall_ns=mono_ns + 1000, mono_ns=mono_ns)
 
 
 def tick(mono_s: float) -> Tick:
-    return Tick(0, round(mono_s * SECOND_NS))
+    return Tick(0, round(mono_s * NS_PER_S))
 
 
 def test_fresh_reading_gives_record_with_reading_timestamp() -> None:
     silo = build_silo(3)
     silo.on_reading(reading(10.0, 500))
 
-    assert silo.on_tick(tick(10.4)) == [MeterRecord(3, 10 * SECOND_NS + 1000, 500)]
+    assert silo.on_tick(tick(10.4)) == [MeterRecord(3, 10 * NS_PER_S + 1000, 500)]
 
 
 def test_no_reading_gives_no_record() -> None:
@@ -83,7 +84,7 @@ def test_stale_since_is_when_the_last_reading_crossed_the_age_limit() -> None:
     silo.on_tick(tick(11.5))
     silo.on_tick(tick(12.5))
 
-    assert silo.stale_since_mono_ns == 11 * SECOND_NS
+    assert silo.stale_since_mono_ns == 11 * NS_PER_S
 
 
 def test_fresh_reading_clears_stale_state() -> None:
@@ -105,8 +106,8 @@ def test_signals_of_other_silos_tanks_are_skipped() -> None:
     )
 
     assert [item for item in silo.on_signals(states) if isinstance(item, SignalChange)] == [
-        SignalChange(1, "dispense", True, None),
-        SignalChange(1, "refill", False, None),
+        SignalChange(tank_id=1, signal=EventKind.DISPENSE, active=True, previous=None),
+        SignalChange(tank_id=1, signal=EventKind.REFILL, active=False, previous=None),
     ]
 
 
@@ -117,9 +118,9 @@ def test_silo_without_tanks_reports_no_signal_changes() -> None:
 
 
 def signals_at(mono_s: float, *, dispense: bool = False, refill: bool = False) -> SignalStates:
-    mono_ns = round(mono_s * SECOND_NS)
+    mono_ns = round(mono_s * NS_PER_S)
     return SignalStates(
-        (TankSignals(1, dispense=dispense, refill=refill),), 1_000 * SECOND_NS + mono_ns, mono_ns
+        (TankSignals(1, dispense=dispense, refill=refill),), 1_000 * NS_PER_S + mono_ns, mono_ns
     )
 
 
@@ -213,19 +214,19 @@ def test_lost_signals_close_the_open_event_at_the_last_fresh_snapshot() -> None:
 
     assert closed == [
         ClosedEvent(
-            UUID(int=1),
-            1,
-            "dispense",
-            1_010 * SECOND_NS,
-            500,
-            1_000 * SECOND_NS + 10_250_000_000,
-            None,
-            250_000_000,
-            "fresh",
-            "signal_lost",
+            event_id=UUID(int=1),
+            tank_id=1,
+            kind=EventKind.DISPENSE,
+            start_wall_ns=1_010 * NS_PER_S,
+            start_value_kg=500,
+            end_wall_ns=1_000 * NS_PER_S + 10_250_000_000,
+            end_value_kg=None,
+            duration_ns=250_000_000,
+            start_quality=StartQuality.FRESH,
+            end_quality=EndQuality.SIGNAL_LOST,
         )
     ]
-    assert silo.signals_stale_since_mono_ns == round(11.25 * SECOND_NS)
+    assert silo.signals_stale_since_mono_ns == round(11.25 * NS_PER_S)
 
 
 def test_lost_signals_are_handled_once() -> None:
@@ -245,7 +246,9 @@ def test_lost_signals_are_detected_even_when_the_meter_is_silent() -> None:
 
     closed = silo.on_tick(tick(20.0))
 
-    assert [item.end_quality for item in closed if isinstance(item, ClosedEvent)] == ["signal_lost"]
+    assert [item.end_quality for item in closed if isinstance(item, ClosedEvent)] == [
+        "signal_lost"
+    ]
 
 
 def test_snapshot_ends_the_stale_signals_state() -> None:
@@ -266,17 +269,17 @@ def test_active_signal_after_lost_signals_starts_an_orphaned_event() -> None:
     (started,) = only_events(silo.on_signals(signals_at(13.0, dispense=True)))
 
     assert isinstance(started, StartedEvent)
-    assert (started.start_quality, started.start_wall_ns) == ("unknown", 1_009 * SECOND_NS)
+    assert (started.start_quality, started.start_wall_ns) == ("unknown", 1_009 * NS_PER_S)
 
 
 def test_signals_that_never_arrived_are_stale_from_the_service_start() -> None:
-    silo = build_silo(1, tank_ids=(1,), started_mono_ns=5 * SECOND_NS)
+    silo = build_silo(1, tank_ids=(1,), started_mono_ns=5 * NS_PER_S)
 
     assert silo.on_tick(tick(5.5)) == []
     assert silo.signals_stale_since_mono_ns is None
 
     assert silo.on_tick(tick(6.5)) == []
-    assert silo.signals_stale_since_mono_ns == 6 * SECOND_NS
+    assert silo.signals_stale_since_mono_ns == 6 * NS_PER_S
 
 
 def test_orphaned_start_after_a_silent_start_is_the_service_start() -> None:
@@ -307,16 +310,16 @@ def test_shutdown_closes_the_open_event_at_the_last_snapshot() -> None:
 
     assert closed == [
         ClosedEvent(
-            UUID(int=1),
-            1,
-            "dispense",
-            1_010 * SECOND_NS,
-            500,
-            1_000 * SECOND_NS + 10_250_000_000,
-            None,
-            250_000_000,
-            "fresh",
-            "service_stopped",
+            event_id=UUID(int=1),
+            tank_id=1,
+            kind=EventKind.DISPENSE,
+            start_wall_ns=1_010 * NS_PER_S,
+            start_value_kg=500,
+            end_wall_ns=1_000 * NS_PER_S + 10_250_000_000,
+            end_value_kg=None,
+            duration_ns=250_000_000,
+            start_quality=StartQuality.FRESH,
+            end_quality=EndQuality.SERVICE_STOPPED,
         )
     ]
 

@@ -42,5 +42,9 @@ def migrate_as_owner(database_url: str) -> None:
 
 def connect_as(database_url: str, role: str) -> psycopg.Connection[TupleRow]:
     connection = psycopg.connect(database_url, autocommit=True)
-    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+    set_role(connection, role)
     return connection
+
+
+def set_role(connection: psycopg.Connection[TupleRow], role: str) -> None:
+    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))

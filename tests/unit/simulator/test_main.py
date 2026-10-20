@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
+from dms.exit_codes import EXIT_CONFIG_ERROR
 from dms.simulator.catalog import SCENARIOS
-from dms.simulator.main import UNKNOWN_SCENARIO_EXIT_CODE, main
+from dms.simulator.main import main
 
 
 def test_list_prints_every_scenario(capsys: pytest.CaptureFixture[str]) -> None:
@@ -24,7 +25,7 @@ def test_config_prints_acquisition_toml(capsys: pytest.CaptureFixture[str]) -> N
 def test_unknown_scenario_lists_available_ones(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["config", "nope", "--link-dir", str(Path("/tmp/dms"))])
 
-    assert exit_code == UNKNOWN_SCENARIO_EXIT_CODE
+    assert exit_code == EXIT_CONFIG_ERROR
     error = capsys.readouterr().err
     assert "unknown scenario 'nope'" in error
     assert "dispense-single" in error

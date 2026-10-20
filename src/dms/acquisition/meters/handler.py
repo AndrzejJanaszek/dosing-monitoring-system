@@ -7,6 +7,8 @@ from dms.acquisition.serial.adapter import FrameOutcome
 from dms.logs import events
 from dms.messages import EngineMessage, MeterReading
 
+logger = structlog.get_logger()
+
 
 class MeterFrameHandler:
     def __init__(
@@ -20,7 +22,7 @@ class MeterFrameHandler:
         self._meter_id = meter_id
         self._parser = parser
         self._out_queue = out_queue
-        self._logger = structlog.get_logger().bind(device_id=meter_id, port=port_name)
+        self._logger = logger.bind(device_id=meter_id, port=port_name)
         self._out_of_range: OutOfRange | None = None
 
     def handle(self, frame: bytes, wall_ns: int, mono_ns: int) -> FrameOutcome:
@@ -30,7 +32,11 @@ class MeterFrameHandler:
         if isinstance(parsed, OutOfRange):
             self._note_out_of_range(parsed)
         else:
-            self._publish(MeterReading(self._meter_id, parsed, wall_ns, mono_ns))
+            self._publish(
+                MeterReading(
+                    meter_id=self._meter_id, value_kg=parsed, wall_ns=wall_ns, mono_ns=mono_ns
+                )
+            )
         return FrameOutcome.ACCEPTED
 
     def _publish(self, reading: MeterReading) -> None:

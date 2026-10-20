@@ -9,7 +9,8 @@ from dms.domain.events import ClosedEvent, StartedEvent
 from dms.domain.records import MeterRecord, WriterRecord
 from dms.logs import events
 from dms.messages import EngineMessage, MeterReading, SignalStates, TankSignals, Tick
-from tests.unit.domain.builders import SECOND_NS, build_silo
+from dms.units import NS_PER_S
+from tests.unit.domain.builders import build_silo
 
 
 def build() -> tuple[Engine, queue.Queue[EngineMessage], queue.Queue[WriterRecord]]:
@@ -36,9 +37,9 @@ def records(out_queue: queue.Queue[WriterRecord]) -> list[WriterRecord]:
 
 def test_reading_is_routed_to_its_silo_and_tick_emits_records() -> None:
     engine, in_queue, out_queue = build()
-    in_queue.put(MeterReading("m1", 100, 5, 1 * SECOND_NS))
-    in_queue.put(MeterReading("m2", 200, 6, 1 * SECOND_NS))
-    in_queue.put(Tick(0, SECOND_NS + 1))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=100, wall_ns=5, mono_ns=1 * NS_PER_S))
+    in_queue.put(MeterReading(meter_id="m2", value_kg=200, wall_ns=6, mono_ns=1 * NS_PER_S))
+    in_queue.put(Tick(0, NS_PER_S + 1))
 
     for _ in range(3):
         engine.step()
@@ -48,7 +49,7 @@ def test_reading_is_routed_to_its_silo_and_tick_emits_records() -> None:
 
 def test_tick_without_readings_emits_nothing() -> None:
     engine, in_queue, out_queue = build()
-    in_queue.put(Tick(0, SECOND_NS))
+    in_queue.put(Tick(0, NS_PER_S))
 
     engine.step()
 
@@ -57,8 +58,8 @@ def test_tick_without_readings_emits_nothing() -> None:
 
 def test_reading_from_unknown_meter_is_ignored() -> None:
     engine, in_queue, out_queue = build()
-    in_queue.put(MeterReading("m9", 1, 0, SECOND_NS))
-    in_queue.put(Tick(0, SECOND_NS))
+    in_queue.put(MeterReading(meter_id="m9", value_kg=1, wall_ns=0, mono_ns=NS_PER_S))
+    in_queue.put(Tick(0, NS_PER_S))
 
     engine.step()
     engine.step()
@@ -75,7 +76,7 @@ def test_run_drains_the_queue_after_stop() -> None:
         silos_by_meter={"m1": build_silo(1)},
         stop_event=stop_event,
     )
-    in_queue.put(MeterReading("m1", 1, 0, 0))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=1, wall_ns=0, mono_ns=0))
     stop_event.set()
 
     engine.run()
@@ -85,11 +86,11 @@ def test_run_drains_the_queue_after_stop() -> None:
 
 def test_stale_and_recovered_reading_are_logged_once_each() -> None:
     engine, in_queue, _ = build()
-    in_queue.put(MeterReading("m1", 100, 0, 10 * SECOND_NS))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=100, wall_ns=0, mono_ns=10 * NS_PER_S))
     for tick_s in (12, 13, 14):
-        in_queue.put(Tick(0, tick_s * SECOND_NS))
-    in_queue.put(MeterReading("m1", 110, 0, 15 * SECOND_NS))
-    in_queue.put(Tick(0, 15 * SECOND_NS))
+        in_queue.put(Tick(0, tick_s * NS_PER_S))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=110, wall_ns=0, mono_ns=15 * NS_PER_S))
+    in_queue.put(Tick(0, 15 * NS_PER_S))
 
     with capture_logs() as logs:
         for _ in range(6):
@@ -145,18 +146,20 @@ def test_unchanged_signals_are_not_logged_again() -> None:
 
 
 def signals_message(mono_s: float, *, dispense: bool) -> SignalStates:
-    mono_ns = round(mono_s * SECOND_NS)
+    mono_ns = round(mono_s * NS_PER_S)
     return SignalStates((TankSignals(1, dispense=dispense, refill=False),), mono_ns, mono_ns)
 
 
 def run_dispense(
     engine: Engine, in_queue: queue.Queue[EngineMessage], *, end_value_kg: int | None
 ) -> None:
-    in_queue.put(MeterReading("m1", 500, 0, 9 * SECOND_NS))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=500, wall_ns=0, mono_ns=9 * NS_PER_S))
     in_queue.put(signals_message(9.5, dispense=False))
     in_queue.put(signals_message(10.0, dispense=True))
     if end_value_kg is not None:
-        in_queue.put(MeterReading("m1", end_value_kg, 0, 14 * SECOND_NS))
+        in_queue.put(
+            MeterReading(meter_id="m1", value_kg=end_value_kg, wall_ns=0, mono_ns=14 * NS_PER_S)
+        )
     in_queue.put(signals_message(14.5, dispense=False))
     for _ in range(5 if end_value_kg is not None else 4):
         engine.step()
@@ -217,10 +220,10 @@ def test_orphaned_event_is_logged_as_a_warning() -> None:
 
 def test_lost_signals_log_the_state_before_the_closed_event_and_its_end() -> None:
     engine, in_queue, out_queue = build()
-    in_queue.put(MeterReading("m1", 500, 0, 9 * SECOND_NS))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=500, wall_ns=0, mono_ns=9 * NS_PER_S))
     in_queue.put(signals_message(9.5, dispense=False))
     in_queue.put(signals_message(10.0, dispense=True))
-    in_queue.put(Tick(0, 12 * SECOND_NS))
+    in_queue.put(Tick(0, 12 * NS_PER_S))
     in_queue.put(signals_message(15.0, dispense=False))
 
     with capture_logs() as logs:
@@ -249,8 +252,8 @@ def test_lost_signals_log_the_state_before_the_closed_event_and_its_end() -> Non
 def test_handle_processes_a_message_without_the_queue() -> None:
     engine, _, out_queue = build()
 
-    engine.handle(MeterReading("m1", 100, 5, SECOND_NS))
-    engine.handle(Tick(0, SECOND_NS + 1))
+    engine.handle(MeterReading(meter_id="m1", value_kg=100, wall_ns=5, mono_ns=NS_PER_S))
+    engine.handle(Tick(0, NS_PER_S + 1))
 
     assert records(out_queue) == [MeterRecord(1, 5, 100)]
 
@@ -272,7 +275,7 @@ def build_stopping_engine() -> tuple[
 
 def test_stop_closes_open_events_after_handling_the_queued_messages() -> None:
     engine, in_queue, out_queue, stop_event = build_stopping_engine()
-    in_queue.put(MeterReading("m1", 500, 0, 9 * SECOND_NS))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=500, wall_ns=0, mono_ns=9 * NS_PER_S))
     in_queue.put(signals_message(9.5, dispense=False))
     in_queue.put(signals_message(10.0, dispense=True))
     in_queue.put(signals_message(10.5, dispense=True))
@@ -286,8 +289,8 @@ def test_stop_closes_open_events_after_handling_the_queued_messages() -> None:
     assert isinstance(closed, ClosedEvent)
     assert (closed.end_quality, closed.end_wall_ns, closed.duration_ns) == (
         "service_stopped",
-        round(10.5 * SECOND_NS),
-        round(0.5 * SECOND_NS),
+        round(10.5 * NS_PER_S),
+        round(0.5 * NS_PER_S),
     )
     (incomplete,) = [entry for entry in logs if entry["event"] == events.EVENT_INCOMPLETE]
     assert incomplete["log_level"] == "error"
@@ -306,10 +309,10 @@ def test_stop_without_open_events_writes_nothing() -> None:
 
 def test_crash_of_the_engine_closes_no_open_events(monkeypatch: pytest.MonkeyPatch) -> None:
     engine, in_queue, out_queue, _ = build_stopping_engine()
-    in_queue.put(MeterReading("m1", 500, 0, 9 * SECOND_NS))
+    in_queue.put(MeterReading(meter_id="m1", value_kg=500, wall_ns=0, mono_ns=9 * NS_PER_S))
     in_queue.put(signals_message(9.5, dispense=False))
     in_queue.put(signals_message(10.0, dispense=True))
-    in_queue.put(Tick(0, 11 * SECOND_NS))
+    in_queue.put(Tick(0, 11 * NS_PER_S))
     handle = engine.handle
     handled: list[EngineMessage] = []
 

@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from dms.acquisition.main import EXIT_CONFIG_ERROR, main
+from dms.acquisition.main import main
+from dms.exit_codes import EXIT_CONFIG_ERROR
 
 
 def test_missing_configuration_exits_with_config_error_code(

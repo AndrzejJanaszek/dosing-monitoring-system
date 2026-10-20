@@ -1,5 +1,7 @@
 from collections.abc import Callable
 
+from dms.units import NS_PER_S
+
 
 class ManualClock:
     def __init__(self, wall_ns: int = 1_700_000_000_000_000_000, mono_ns: int = 0) -> None:
@@ -13,7 +15,7 @@ class ManualClock:
         return self._mono_ns
 
     def advance(self, seconds: float) -> None:
-        delta = round(seconds * 1_000_000_000)
+        delta = round(seconds * NS_PER_S)
         self._wall_ns += delta
         self._mono_ns += delta
 

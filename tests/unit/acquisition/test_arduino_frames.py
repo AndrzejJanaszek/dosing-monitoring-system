@@ -1,6 +1,7 @@
 import pytest
 
 from dms.acquisition.arduino.frames import (
+    BoardLogLevel,
     BoardLogLine,
     PinLevels,
     TemperaturesFrame,
@@ -13,42 +14,47 @@ from dms.simulator.encoders import banner_lines, encode_pins_frame, encode_tempe
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        (b"[DEBUG] pin: 4", BoardLogLine("DEBUG", "pin: 4")),
-        (b"[DEBUG]: i: 3", BoardLogLine("DEBUG", "i: 3")),
-        (b"[INFO] ready", BoardLogLine("INFO", "ready")),
-        (b"[WARNING] low", BoardLogLine("WARNING", "low")),
-        (b"[ERROR] sensor failure", BoardLogLine("ERROR", "sensor failure")),
-        (b"[ERROR]", BoardLogLine("ERROR", "")),
+        (b"[DEBUG] pin: 4", BoardLogLine(BoardLogLevel.DEBUG, "pin: 4")),
+        (b"[DEBUG]: i: 3", BoardLogLine(BoardLogLevel.DEBUG, "i: 3")),
+        (b"[INFO] ready", BoardLogLine(BoardLogLevel.INFO, "ready")),
+        (b"[WARNING] low", BoardLogLine(BoardLogLevel.WARNING, "low")),
+        (b"[ERROR] sensor failure", BoardLogLine(BoardLogLevel.ERROR, "sensor failure")),
+        (b"[ERROR]", BoardLogLine(BoardLogLevel.ERROR, "")),
         (
             b"[ERROR] TEMP_INTERVAL_MS myst be greater than CONVERSION_TIME_MS!",
-            BoardLogLine("ERROR", "TEMP_INTERVAL_MS myst be greater than CONVERSION_TIME_MS!"),
+            BoardLogLine(
+                BoardLogLevel.ERROR, "TEMP_INTERVAL_MS myst be greater than CONVERSION_TIME_MS!"
+            ),
         ),
         (
             b"[WARNING] Default conversation time. PRECISION not set or wrong value.",
-            BoardLogLine("WARNING", "Default conversation time. PRECISION not set or wrong value."),
+            BoardLogLine(
+                BoardLogLevel.WARNING,
+                "Default conversation time. PRECISION not set or wrong value.",
+            ),
         ),
         (
             b"[DEBUG]: i:0 Address: 28A8F126AB240B1C temp: 21.50",
-            BoardLogLine("DEBUG", "i:0 Address: 28A8F126AB240B1C temp: 21.50"),
+            BoardLogLine(BoardLogLevel.DEBUG, "i:0 Address: 28A8F126AB240B1C temp: 21.50"),
         ),
-        (b"[DEBUG] pin: 4 value: 1", BoardLogLine("DEBUG", "pin: 4 value: 1")),
+        (b"[DEBUG] pin: 4 value: 1", BoardLogLine(BoardLogLevel.DEBUG, "pin: 4 value: 1")),
         (
             b"[DEBUG] REGISTERED io-pin (INPUT_PULLUP) - on pin: 4",
-            BoardLogLine("DEBUG", "REGISTERED io-pin (INPUT_PULLUP) - on pin: 4"),
+            BoardLogLine(BoardLogLevel.DEBUG, "REGISTERED io-pin (INPUT_PULLUP) - on pin: 4"),
         ),
         (
             b"[DEBUG] Locating devices...Found 2 devices.",
-            BoardLogLine("DEBUG", "Locating devices...Found 2 devices."),
+            BoardLogLine(BoardLogLevel.DEBUG, "Locating devices...Found 2 devices."),
         ),
         (
             b"[DEBUG] Found device 0 with address: 28A8F126AB240B1C",
-            BoardLogLine("DEBUG", "Found device 0 with address: 28A8F126AB240B1C"),
+            BoardLogLine(BoardLogLevel.DEBUG, "Found device 0 with address: 28A8F126AB240B1C"),
         ),
         (
             b"[DEBUG] Found ghost device at 1 but could not detect address."
             b" Check power and cabling[DEBUG] Found device 0 with address: 28A8F126AB240B1C",
             BoardLogLine(
-                "DEBUG",
+                BoardLogLevel.DEBUG,
                 "Found ghost device at 1 but could not detect address."
                 " Check power and cabling[DEBUG] Found device 0 with address: 28A8F126AB240B1C",
             ),

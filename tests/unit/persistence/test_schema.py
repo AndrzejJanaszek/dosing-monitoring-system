@@ -15,7 +15,9 @@ from dms.persistence.schema import (
 
 
 def write_migration(directory: Path, file_name: str, change: str = "minor") -> None:
-    (directory / file_name).write_text(f"-- schema-change: {change}\nSELECT 1;\n", encoding="utf-8")
+    (directory / file_name).write_text(
+        f"-- schema-change: {change}\nSELECT 1;\n", encoding="utf-8"
+    )
 
 
 def test_packaged_migrations_load_and_start_with_init() -> None:
@@ -118,7 +120,7 @@ def test_badly_named_file_is_rejected(tmp_path: Path) -> None:
         ("0.0.0", "1.0.0", False),
     ],
 )
-def test_compatibility_rule(database: str, package: str, compatible: bool) -> None:
+def test_compatibility_rule(database: str, package: str, *, compatible: bool) -> None:
     assert is_compatible(SchemaVersion.parse(database), SchemaVersion.parse(package)) is compatible
 
 

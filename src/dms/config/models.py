@@ -1,8 +1,10 @@
 from collections import Counter
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from dms.domain.events import EventKind
 from dms.logs.setup import LogFormat, LogLevel
 
 MAX_SMALLINT = 32767
@@ -18,9 +20,15 @@ NON_EMPTY = 1
 DEFAULT_METER_MAX_FRAME_LENGTH = 64
 DEFAULT_BOARD_MAX_FRAME_LENGTH = 512
 MAX_TANKS_PER_SILO = 2
+MIN_PIN_LEVEL = 0
+MAX_PIN_LEVEL = 1
+PIN_LEVELS = (MIN_PIN_LEVEL, MAX_PIN_LEVEL)
 
 type BaudRate = Literal[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
-type MeterFormat = Literal["dgtp"]
+
+
+class MeterFormat(StrEnum):
+    DGTP = "dgtp"
 
 
 class FrozenModel(BaseModel):
@@ -34,8 +42,8 @@ class DatabaseConfig(FrozenModel):
 
 
 class LoggingConfig(FrozenModel):
-    level: LogLevel = "INFO"
-    format: LogFormat = "auto"
+    level: LogLevel = LogLevel.INFO
+    format: LogFormat = LogFormat.AUTO
 
 
 class SharedConfig(FrozenModel):
@@ -70,7 +78,7 @@ class BoardConfig(SerialPortConfig):
 
 class InputConfig(FrozenModel):
     pin: StrictInt = Field(ge=0)
-    active_level: StrictInt = Field(ge=0, le=1)
+    active_level: StrictInt = Field(ge=MIN_PIN_LEVEL, le=MAX_PIN_LEVEL)
 
 
 class TankConfig(FrozenModel):
@@ -151,7 +159,10 @@ def _tank_errors(config: AcquisitionConfig) -> list[str]:
                 f"tanks[{index}].silo_id: silo {tank.silo_id} has more than"
                 f" {MAX_TANKS_PER_SILO} tanks"
             )
-        for signal, input_config in (("dispense", tank.dispense), ("refill", tank.refill)):
+        for signal, input_config in (
+            (EventKind.DISPENSE, tank.dispense),
+            (EventKind.REFILL, tank.refill),
+        ):
             owner = pin_owners.get(input_config.pin)
             if owner is not None:
                 errors.append(

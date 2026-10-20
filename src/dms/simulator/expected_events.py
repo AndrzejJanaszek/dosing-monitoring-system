@@ -1,16 +1,13 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from dms.domain.events import EndQuality, EventKind, StartQuality
 from dms.simulator.layout import Input
-from dms.simulator.scenario import EventKind, Scenario
+from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import MeterSample, PinsSample, Sample
 
-FRESH = "fresh"
-STALE_READING = "stale_reading"
-UNKNOWN = "unknown"
 
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ExpectedEvent:
     tank_id: int
     kind: EventKind
@@ -18,15 +15,15 @@ class ExpectedEvent:
     end_ns: int
     start_value_kg: int | None
     end_value_kg: int | None
-    start_quality: str
-    end_quality: str
+    start_quality: StartQuality
+    end_quality: EndQuality
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _OpenEvent:
     start_ns: int
     start_value_kg: int | None
-    start_quality: str
+    start_quality: StartQuality
 
 
 def expected_events(
@@ -70,7 +67,7 @@ def expected_events(
 
 
 def _wirings(dispense: Input, refill: Input) -> tuple[tuple[EventKind, Input], ...]:
-    return (("dispense", dispense), ("refill", refill))
+    return ((EventKind.DISPENSE, dispense), (EventKind.REFILL, refill))
 
 
 def _fresh_value_kg(
@@ -81,8 +78,12 @@ def _fresh_value_kg(
     return meter_sample.value_kg
 
 
-def _quality(value_kg: int | None) -> str:
-    return STALE_READING if value_kg is None else FRESH
+def _start_quality(value_kg: int | None) -> StartQuality:
+    return StartQuality.STALE_READING if value_kg is None else StartQuality.FRESH
+
+
+def _end_quality(value_kg: int | None) -> EndQuality:
+    return EndQuality.STALE_READING if value_kg is None else EndQuality.FRESH
 
 
 def _step(
@@ -98,24 +99,30 @@ def _step(
     opened = open_events.get(key)
     if first:
         if active:
-            open_events[key] = _OpenEvent(service_start_ns, None, UNKNOWN)
+            open_events[key] = _OpenEvent(
+                start_ns=service_start_ns,
+                start_value_kg=None,
+                start_quality=StartQuality.UNKNOWN,
+            )
         return []
     if opened is None and active:
-        open_events[key] = _OpenEvent(at_ns, value_kg, _quality(value_kg))
+        open_events[key] = _OpenEvent(
+            start_ns=at_ns, start_value_kg=value_kg, start_quality=_start_quality(value_kg)
+        )
         return []
     if opened is not None and not active:
         open_events[key] = None
         tank_id, kind = key
         return [
             ExpectedEvent(
-                tank_id,
-                kind,
-                opened.start_ns,
-                at_ns,
-                opened.start_value_kg,
-                value_kg,
-                opened.start_quality,
-                _quality(value_kg),
+                tank_id=tank_id,
+                kind=kind,
+                start_ns=opened.start_ns,
+                end_ns=at_ns,
+                start_value_kg=opened.start_value_kg,
+                end_value_kg=value_kg,
+                start_quality=opened.start_quality,
+                end_quality=_end_quality(value_kg),
             )
         ]
     return []

@@ -5,13 +5,12 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from dms.acquisition.clock import NS_PER_S
+from dms.exit_codes import EXIT_CONFIG_ERROR, EXIT_OK
 from dms.simulator.catalog import SCENARIOS
 from dms.simulator.dms_config import acquisition_config, render_acquisition_toml
 from dms.simulator.scenario import Scenario
 from dms.simulator.transport import SimulationRunner
-
-UNKNOWN_SCENARIO_EXIT_CODE = 2
+from dms.units import NS_PER_S
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,10 +37,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"unknown scenario '{arguments.scenario}', available: {', '.join(SCENARIOS)}",
             file=sys.stderr,
         )
-        return UNKNOWN_SCENARIO_EXIT_CODE
+        return EXIT_CONFIG_ERROR
     if arguments.command == "config":
         return _print_config(scenario, arguments.link_dir)
-    return _run_scenario(scenario, arguments.link_dir, arguments.wait)
+    return _run_scenario(scenario, arguments.link_dir, wait_for_enter=arguments.wait)
 
 
 def _list_scenarios() -> int:
@@ -50,15 +49,15 @@ def _list_scenarios() -> int:
         tanks = sum(len(silo.tanks) for silo in scenario.layout.silos)
         duration_s = scenario.duration_ns / NS_PER_S
         print(f"{scenario.name}\tsilos={silos} tanks={tanks}\t{duration_s:g} s")
-    return 0
+    return EXIT_OK
 
 
 def _print_config(scenario: Scenario, link_dir: Path) -> int:
     print(render_acquisition_toml(acquisition_config(scenario.layout, link_dir)), end="")
-    return 0
+    return EXIT_OK
 
 
-def _run_scenario(scenario: Scenario, link_dir: Path, wait_for_enter: bool) -> int:
+def _run_scenario(scenario: Scenario, link_dir: Path, *, wait_for_enter: bool) -> int:
     runner = SimulationRunner(scenario, link_dir)
     runner.open()
     for device_id, port in runner.ports.items():
@@ -75,7 +74,7 @@ def _run_scenario(scenario: Scenario, link_dir: Path, wait_for_enter: bool) -> i
         _start(runner)
 
     runner.run()
-    return 0
+    return EXIT_OK
 
 
 def _start(runner: SimulationRunner) -> None:

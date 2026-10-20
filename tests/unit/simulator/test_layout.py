@@ -26,45 +26,57 @@ def test_valid_layout_exposes_lookups() -> None:
 
 
 def test_silo_names_and_meter_ids() -> None:
-    assert SiloLayout(3, (tank(1, 4, 5),)).display_name == "Silos 3"
-    assert SiloLayout(3, (tank(1, 4, 5),), name="Cement").display_name == "Cement"
-    assert SiloLayout(3, (tank(1, 4, 5),)).meter_id == "meter-3"
+    assert SiloLayout(id=3, tanks=(tank(1, 4, 5),)).display_name == "Silos 3"
+    assert SiloLayout(id=3, tanks=(tank(1, 4, 5),), name="Cement").display_name == "Cement"
+    assert SiloLayout(id=3, tanks=(tank(1, 4, 5),)).meter_id == "meter-3"
 
 
 INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
-    "L1": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(1, (tank(2, 6, 7),)))),
+    "duplicate-silo-id": (
+        lambda: PlantLayout(
+            (SiloLayout(id=1, tanks=(tank(1, 4, 5),)), SiloLayout(id=1, tanks=(tank(2, 6, 7),)))
+        ),
         "silos[1].id: duplicate silo id 1",
     ),
-    "L2": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(2, (tank(1, 6, 7),)))),
+    "duplicate-tank-id": (
+        lambda: PlantLayout(
+            (SiloLayout(id=1, tanks=(tank(1, 4, 5),)), SiloLayout(id=2, tanks=(tank(1, 6, 7),)))
+        ),
         "silos[1].tanks[0].id: duplicate tank id 1",
     ),
-    "L3-none": (lambda: PlantLayout((SiloLayout(1, ()),)), "silos[0].tanks: 0 tanks"),
-    "L3-many": (lambda: PlantLayout((SiloLayout(1, THREE_TANKS),)), "silos[0].tanks: 3 tanks"),
-    "L4": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 4),)),)),
+    "silo-without-tanks": (
+        lambda: PlantLayout((SiloLayout(id=1, tanks=()),)),
+        "silos[0].tanks: 0 tanks",
+    ),
+    "silo-with-too-many-tanks": (
+        lambda: PlantLayout((SiloLayout(id=1, tanks=THREE_TANKS),)),
+        "silos[0].tanks: 3 tanks",
+    ),
+    "pin-used-twice": (
+        lambda: PlantLayout((SiloLayout(id=1, tanks=(tank(1, 4, 4),)),)),
         "silos[0].tanks[0].refill.pin: pin 4 is already used",
     ),
-    "L5": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 12),)),)),
+    "pin-not-on-board": (
+        lambda: PlantLayout((SiloLayout(id=1, tanks=(tank(1, 4, 12),)),)),
         "silos[0].tanks[0].refill.pin: pin 12 is not on board",
     ),
-    "L6": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5, active_level=2),)),)),
+    "active-level-out-of-range": (
+        lambda: PlantLayout((SiloLayout(id=1, tanks=(tank(1, 4, 5, active_level=2),)),)),
         "active_level: 2 is not 0 or 1",
     ),
-    "L7": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),)),), SignalBoard(pins=(4, 5, 5))),
+    "duplicate-board-pin": (
+        lambda: PlantLayout(
+            (SiloLayout(id=1, tanks=(tank(1, 4, 5),)),), SignalBoard(pins=(4, 5, 5))
+        ),
         "board.pins: duplicate pin 5",
     ),
-    "L8-format": (
+    "sensor-address-malformed": (
         lambda: PlantLayout(
             one_tank_layout().silos, SignalBoard(sensors=(TemperatureSensor("28a8", 20.0),))
         ),
         "board.sensors[0].address",
     ),
-    "L8-duplicate": (
+    "duplicate-sensor-address": (
         lambda: PlantLayout(
             one_tank_layout().silos,
             SignalBoard(
@@ -76,35 +88,41 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
         ),
         "board.sensors[1].address: duplicate",
     ),
-    "L9-silo": (
-        lambda: PlantLayout((SiloLayout(0, (tank(1, 4, 5),)),)),
+    "silo-id-out-of-range": (
+        lambda: PlantLayout((SiloLayout(id=0, tanks=(tank(1, 4, 5),)),)),
         "silos[0].id: 0 is outside",
     ),
-    "L9-tank": (
-        lambda: PlantLayout((SiloLayout(1, (tank(40000, 4, 5),)),)),
+    "tank-id-out-of-range": (
+        lambda: PlantLayout((SiloLayout(id=1, tanks=(tank(40000, 4, 5),)),)),
         "silos[0].tanks[0].id: 40000 is outside",
     ),
-    "L10-rate": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(rate_hz=0)),)),
+    "meter-rate-zero": (
+        lambda: PlantLayout(
+            (SiloLayout(id=1, tanks=(tank(1, 4, 5),), meter=MeterDevice(rate_hz=0)),)
+        ),
         "meter.rate_hz",
     ),
-    "L10-rate-too-high": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(rate_hz=1e10)),)),
+    "meter-rate-too-high": (
+        lambda: PlantLayout(
+            (SiloLayout(id=1, tanks=(tank(1, 4, 5),), meter=MeterDevice(rate_hz=1e10)),)
+        ),
         "meter.rate_hz: 1e+10 is outside",
     ),
-    "L10-division": (
-        lambda: PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(division_kg=-1)),)),
+    "negative-division": (
+        lambda: PlantLayout(
+            (SiloLayout(id=1, tanks=(tank(1, 4, 5),), meter=MeterDevice(division_kg=-1)),)
+        ),
         "meter.division_kg",
     ),
-    "L10-period": (
+    "pins-period-zero": (
         lambda: PlantLayout(one_tank_layout().silos, SignalBoard(pins_period_s=0)),
         "board.pins_period_s",
     ),
-    "L10-period-too-short": (
+    "temperatures-period-too-short": (
         lambda: PlantLayout(one_tank_layout().silos, SignalBoard(temperatures_period_s=1e-10)),
         "board.temperatures_period_s: 1e-10 s is shorter than",
     ),
-    "L11": (
+    "board-id-equals-meter-id": (
         lambda: PlantLayout(one_tank_layout().silos, SignalBoard(id="meter-1")),
         "board.id: 'meter-1' is also a meter id",
     ),
@@ -123,7 +141,7 @@ def test_invalid_layout_is_rejected(rule: str) -> None:
 
 def test_several_layout_errors_are_reported_together() -> None:
     with pytest.raises(ScenarioError) as raised:
-        PlantLayout((SiloLayout(1, (tank(1, 4, 12, active_level=2),)),))
+        PlantLayout((SiloLayout(id=1, tanks=(tank(1, 4, 12, active_level=2),)),))
 
     assert len(raised.value.errors) == 3
 

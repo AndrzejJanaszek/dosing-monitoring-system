@@ -3,11 +3,11 @@ from itertools import count
 from uuid import UUID
 
 from dms.domain.silo import Silo
+from dms.units import NS_PER_S
 
-SECOND_NS = 1_000_000_000
-MAX_READING_AGE_NS = SECOND_NS
-MAX_SIGNAL_AGE_NS = SECOND_NS
-READING_CACHE_WINDOW_NS = 60 * SECOND_NS
+MAX_READING_AGE_NS = NS_PER_S
+MAX_SIGNAL_AGE_NS = NS_PER_S
+READING_CACHE_WINDOW_NS = 60 * NS_PER_S
 
 
 def sequential_ids() -> Callable[[], UUID]:

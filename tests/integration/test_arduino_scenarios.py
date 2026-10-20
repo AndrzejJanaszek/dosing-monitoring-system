@@ -7,6 +7,7 @@ from dms.acquisition.arduino.handler import ArduinoFrameHandler
 from dms.acquisition.arduino.mapping import SignalMapper
 from dms.acquisition.serial.adapter import FrameOutcome
 from dms.acquisition.serial.framing import Framer
+from dms.domain.events import EventKind
 from dms.messages import EngineMessage, SignalStates, TankSignals
 from dms.simulator.catalog import SCENARIOS
 from dms.simulator.dms_config import acquisition_config
@@ -20,8 +21,8 @@ def expected_states(scenario: Scenario, at_ns: int) -> SignalStates:
     tanks = tuple(
         TankSignals(
             tank.id,
-            dispense=signal_active(scenario, tank.id, "dispense", at_ns),
-            refill=signal_active(scenario, tank.id, "refill", at_ns),
+            dispense=signal_active(scenario, tank.id, EventKind.DISPENSE, at_ns),
+            refill=signal_active(scenario, tank.id, EventKind.REFILL, at_ns),
         )
         for silo in scenario.layout.silos
         for tank in silo.tanks

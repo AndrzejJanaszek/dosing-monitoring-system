@@ -1,22 +1,23 @@
+from dms.domain.events import EndQuality, EventKind, StartQuality
 from dms.simulator.expected_events import ExpectedEvent, expected_events
 from dms.simulator.layout import PlantLayout, SiloLayout
 from dms.simulator.timeline import MeterSample, PinsSample, Sample
+from dms.units import NS_PER_S
 from tests.unit.simulator.builders import dispense, scenario_with, tank
 
-SECOND_NS = 1_000_000_000
-MAX_AGE_NS = SECOND_NS
+MAX_AGE_NS = NS_PER_S
 
 
 def pins(at_s: float, *, dispense_active: bool = False, refill_active: bool = False) -> PinsSample:
     return PinsSample(
-        round(at_s * SECOND_NS),
+        round(at_s * NS_PER_S),
         "arduino",
         ((4, 0 if dispense_active else 1), (5, 0 if refill_active else 1)),
     )
 
 
 def meter(at_s: float, value_kg: int) -> MeterSample:
-    return MeterSample(round(at_s * SECOND_NS), "meter-1", value_kg)
+    return MeterSample(round(at_s * NS_PER_S), "meter-1", value_kg)
 
 
 def events_from(samples: list[Sample], start_ns: int = 0) -> list[ExpectedEvent]:
@@ -37,7 +38,16 @@ def test_completed_event_uses_the_latest_meter_samples_before_each_edge() -> Non
     ]
 
     assert events_from(samples) == [
-        ExpectedEvent(1, "dispense", 1_100_000_000, 2_100_000_000, 1000, 700, "fresh", "fresh")
+        ExpectedEvent(
+            tank_id=1,
+            kind=EventKind.DISPENSE,
+            start_ns=1_100_000_000,
+            end_ns=2_100_000_000,
+            start_value_kg=1000,
+            end_value_kg=700,
+            start_quality=StartQuality.FRESH,
+            end_quality=EndQuality.FRESH,
+        )
     ]
 
 
@@ -138,10 +148,17 @@ def test_active_signal_in_the_first_sample_gives_an_unknown_start_event() -> Non
         pins(8.0),
     ]
 
-    (event,) = events_from(samples, start_ns=5 * SECOND_NS)
+    (event,) = events_from(samples, start_ns=5 * NS_PER_S)
 
     assert event == ExpectedEvent(
-        1, "dispense", 5 * SECOND_NS, 8 * SECOND_NS, None, 700, "unknown", "fresh"
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_ns=5 * NS_PER_S,
+        end_ns=8 * NS_PER_S,
+        start_value_kg=None,
+        end_value_kg=700,
+        start_quality=StartQuality.UNKNOWN,
+        end_quality=EndQuality.FRESH,
     )
 
 
@@ -169,7 +186,7 @@ def test_dispense_and_refill_of_one_tank_are_tracked_separately() -> None:
     events = events_from(samples)
 
     assert [
-        (item.kind, item.start_ns // SECOND_NS, item.end_ns // SECOND_NS) for item in events
+        (item.kind, item.start_ns // NS_PER_S, item.end_ns // NS_PER_S) for item in events
     ] == [
         ("dispense", 1, 3),
         ("refill", 2, 4),
@@ -177,12 +194,12 @@ def test_dispense_and_refill_of_one_tank_are_tracked_separately() -> None:
 
 
 def test_active_level_of_the_wiring_is_respected() -> None:
-    layout = PlantLayout((SiloLayout(1, (tank(1, 4, 5, active_level=1),)),))
+    layout = PlantLayout((SiloLayout(id=1, tanks=(tank(1, 4, 5, active_level=1),)),))
     samples: list[Sample] = [
         meter(0.0, 1000),
         PinsSample(0, "arduino", ((4, 0), (5, 0))),
-        PinsSample(SECOND_NS, "arduino", ((4, 1), (5, 0))),
-        PinsSample(2 * SECOND_NS, "arduino", ((4, 0), (5, 0))),
+        PinsSample(NS_PER_S, "arduino", ((4, 1), (5, 0))),
+        PinsSample(2 * NS_PER_S, "arduino", ((4, 0), (5, 0))),
     ]
 
     events = expected_events(
@@ -193,13 +210,15 @@ def test_active_level_of_the_wiring_is_respected() -> None:
 
 
 def test_meters_of_different_silos_are_kept_apart() -> None:
-    layout = PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(2, (tank(2, 6, 7),))))
+    layout = PlantLayout(
+        (SiloLayout(id=1, tanks=(tank(1, 4, 5),)), SiloLayout(id=2, tanks=(tank(2, 6, 7),)))
+    )
     samples: list[Sample] = [
         MeterSample(0, "meter-1", 1000),
         MeterSample(0, "meter-2", 5000),
         PinsSample(0, "arduino", ((4, 1), (5, 1), (6, 1), (7, 1))),
-        PinsSample(SECOND_NS, "arduino", ((4, 1), (5, 1), (6, 0), (7, 1))),
-        PinsSample(2 * SECOND_NS, "arduino", ((4, 1), (5, 1), (6, 1), (7, 1))),
+        PinsSample(NS_PER_S, "arduino", ((4, 1), (5, 1), (6, 0), (7, 1))),
+        PinsSample(2 * NS_PER_S, "arduino", ((4, 1), (5, 1), (6, 1), (7, 1))),
     ]
 
     (event,) = expected_events(

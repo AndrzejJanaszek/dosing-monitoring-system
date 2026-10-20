@@ -3,9 +3,8 @@ import threading
 
 from dms.acquisition.ticker import TickTimer
 from dms.messages import EngineMessage, Tick
+from dms.units import NS_PER_S
 from tests.fakes import ManualClock
-
-SECOND_NS = 1_000_000_000
 
 
 def build(
@@ -14,7 +13,7 @@ def build(
     out_queue: queue.Queue[EngineMessage] = queue.Queue()
     timer = TickTimer(
         clock=clock,
-        interval_ns=SECOND_NS,
+        interval_ns=NS_PER_S,
         out_queue=out_queue,
         stop_event=stop_event if stop_event is not None else threading.Event(),
         wait=clock.waiter(),
@@ -32,16 +31,16 @@ def ticks(out_queue: queue.Queue[EngineMessage]) -> list[Tick]:
 
 
 def test_ticks_come_at_fixed_intervals_from_start() -> None:
-    clock = ManualClock(mono_ns=5 * SECOND_NS)
+    clock = ManualClock(mono_ns=5 * NS_PER_S)
     timer, out_queue = build(clock)
 
     for _ in range(3):
         timer.step()
 
     assert [tick.mono_ns for tick in ticks(out_queue)] == [
-        6 * SECOND_NS,
-        7 * SECOND_NS,
-        8 * SECOND_NS,
+        6 * NS_PER_S,
+        7 * NS_PER_S,
+        8 * NS_PER_S,
     ]
 
 
@@ -56,7 +55,7 @@ def test_late_wakeup_does_not_shift_later_deadlines() -> None:
 
     timer = TickTimer(
         clock=clock,
-        interval_ns=SECOND_NS,
+        interval_ns=NS_PER_S,
         out_queue=out_queue,
         stop_event=threading.Event(),
         wait=oversleeping_wait,
@@ -65,7 +64,7 @@ def test_late_wakeup_does_not_shift_later_deadlines() -> None:
     timer.step()
     timer.step()
 
-    assert [tick.mono_ns for tick in ticks(out_queue)] == [round(1.3 * SECOND_NS), 2 * SECOND_NS]
+    assert [tick.mono_ns for tick in ticks(out_queue)] == [round(1.3 * NS_PER_S), 2 * NS_PER_S]
 
 
 def test_missed_deadlines_are_skipped_not_replayed() -> None:
@@ -78,9 +77,9 @@ def test_missed_deadlines_are_skipped_not_replayed() -> None:
     timer.step()
 
     assert [tick.mono_ns for tick in ticks(out_queue)] == [
-        SECOND_NS,
-        round(4.5 * SECOND_NS),
-        5 * SECOND_NS,
+        NS_PER_S,
+        round(4.5 * NS_PER_S),
+        5 * NS_PER_S,
     ]
 
 
@@ -90,7 +89,7 @@ def test_tick_carries_both_clocks() -> None:
 
     timer.step()
 
-    assert ticks(out_queue) == [Tick(1_000 + SECOND_NS, SECOND_NS)]
+    assert ticks(out_queue) == [Tick(1_000 + NS_PER_S, NS_PER_S)]
 
 
 def test_no_tick_when_stopped_while_waiting() -> None:
@@ -98,7 +97,7 @@ def test_no_tick_when_stopped_while_waiting() -> None:
     out_queue: queue.Queue[EngineMessage] = queue.Queue()
     timer = TickTimer(
         clock=clock,
-        interval_ns=SECOND_NS,
+        interval_ns=NS_PER_S,
         out_queue=out_queue,
         stop_event=threading.Event(),
         wait=lambda _seconds: True,

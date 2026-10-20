@@ -10,7 +10,8 @@ from dms.simulator.layout import (
     TankWiring,
     TemperatureSensor,
 )
-from dms.simulator.scenario import Dispense, Refill, Scenario, SimulatedTankEvent
+from dms.simulator.scenario import Scenario
+from dms.simulator.scenario_model import Dispense, Refill, SimulatedTankEvent
 
 DISPENSE_DURATION_S = 30.0
 DISPENSE_MASS_KG = 1_500
@@ -27,16 +28,20 @@ ACTIVE_HIGH_LEVEL = 1
 def _tank(
     tank_id: int, dispense_pin: int, refill_pin: int, active_level: int = DEFAULT_ACTIVE_LEVEL
 ) -> TankWiring:
-    return TankWiring(tank_id, Input(dispense_pin, active_level), Input(refill_pin, active_level))
+    return TankWiring(
+        id=tank_id,
+        dispense=Input(pin=dispense_pin, active_level=active_level),
+        refill=Input(pin=refill_pin, active_level=active_level),
+    )
 
 
-ONE_TANK = PlantLayout((SiloLayout(1, (_tank(1, 4, 5),)),))
-TWO_TANKS = PlantLayout((SiloLayout(1, (_tank(1, 4, 5), _tank(2, 6, 7))),))
+ONE_TANK = PlantLayout((SiloLayout(id=1, tanks=(_tank(1, 4, 5),)),))
+TWO_TANKS = PlantLayout((SiloLayout(id=1, tanks=(_tank(1, 4, 5), _tank(2, 6, 7))),))
 TWO_SILOS = PlantLayout(
-    (SiloLayout(1, (_tank(1, 4, 5),)), SiloLayout(2, (_tank(2, 6, 7),))),
+    (SiloLayout(id=1, tanks=(_tank(1, 4, 5),)), SiloLayout(id=2, tanks=(_tank(2, 6, 7),))),
 )
 ONE_TANK_ACTIVE_HIGH = PlantLayout(
-    (SiloLayout(1, (_tank(1, 4, 5, ACTIVE_HIGH_LEVEL),)),),
+    (SiloLayout(id=1, tanks=(_tank(1, 4, 5, ACTIVE_HIGH_LEVEL),)),),
 )
 ONE_TANK_WITH_SENSORS = PlantLayout(
     ONE_TANK.silos,
@@ -57,17 +62,30 @@ class Relation:
 
 
 def _dispense(tank_id: int, start_s: float) -> Dispense:
-    return Dispense(tank_id, start_s, start_s + DISPENSE_DURATION_S, DISPENSE_MASS_KG)
+    return Dispense(
+        tank_id=tank_id,
+        start_s=start_s,
+        end_s=start_s + DISPENSE_DURATION_S,
+        mass_kg=DISPENSE_MASS_KG,
+    )
 
 
 def _refill(tank_id: int, start_s: float) -> Refill:
-    return Refill(tank_id, start_s, start_s + REFILL_DURATION_S, REFILL_MASS_KG)
+    return Refill(
+        tank_id=tank_id, start_s=start_s, end_s=start_s + REFILL_DURATION_S, mass_kg=REFILL_MASS_KG
+    )
 
 
 def _scenario(
     name: str, layout: PlantLayout, *events: SimulatedTankEvent, duration_s: float | None = None
 ) -> Scenario:
-    return Scenario(name, layout, None, tuple(events), duration_s)
+    return Scenario(
+        name=name,
+        layout=layout,
+        start_masses_kg=None,
+        events=tuple(events),
+        duration_s=duration_s,
+    )
 
 
 RELATIONS = (
@@ -106,7 +124,12 @@ def _pure_events() -> list[Scenario]:
         _scenario(
             "dispense-short",
             ONE_TANK,
-            Dispense(1, SHORT_DISPENSE_START_S, SHORT_DISPENSE_END_S, SHORT_DISPENSE_MASS_KG),
+            Dispense(
+                tank_id=1,
+                start_s=SHORT_DISPENSE_START_S,
+                end_s=SHORT_DISPENSE_END_S,
+                mass_kg=SHORT_DISPENSE_MASS_KG,
+            ),
         ),
         _scenario("refill-single", ONE_TANK, _refill(1, 10)),
         _scenario(

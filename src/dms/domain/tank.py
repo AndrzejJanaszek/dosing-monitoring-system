@@ -7,7 +7,7 @@ from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, 
 from dms.messages import TankSignals
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SignalChange:
     tank_id: int
     signal: EventKind
@@ -25,7 +25,7 @@ class _Phase(Enum):
     IN_PROGRESS = auto()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _OpenEvent:
     event_id: UUID
     start_wall_ns: int
@@ -50,10 +50,10 @@ class SignalEventTracker:
         self._open: _OpenEvent | None = None
 
     def on_state(
-        self, active: bool, wall_ns: int, mono_ns: int, value_kg: int | None
+        self, *, active: bool, wall_ns: int, mono_ns: int, value_kg: int | None
     ) -> Sequence[StartedEvent | ClosedEvent]:
         if self._phase is _Phase.UNKNOWN:
-            return self._leave_unknown(active)
+            return self._leave_unknown(active=active)
         if self._phase is _Phase.IDLE:
             return [self._start(wall_ns, mono_ns, value_kg)] if active else []
         if active:
@@ -68,30 +68,40 @@ class SignalEventTracker:
         self._unknown_since_wall_ns = last_fresh_wall_ns
         return closed
 
-    def _leave_unknown(self, active: bool) -> Sequence[StartedEvent | ClosedEvent]:
+    def _leave_unknown(self, *, active: bool) -> Sequence[StartedEvent | ClosedEvent]:
         if not active:
             self._phase = _Phase.IDLE
             return []
         self._phase = _Phase.ORPHANED
         self._open = _OpenEvent(
-            self._new_event_id(), self._unknown_since_wall_ns, None, None, "unknown"
+            event_id=self._new_event_id(),
+            start_wall_ns=self._unknown_since_wall_ns,
+            start_mono_ns=None,
+            start_value_kg=None,
+            start_quality=StartQuality.UNKNOWN,
         )
         return [self._started(self._open)]
 
     def _start(self, wall_ns: int, mono_ns: int, value_kg: int | None) -> StartedEvent:
         self._phase = _Phase.IN_PROGRESS
-        start_quality: StartQuality = "stale_reading" if value_kg is None else "fresh"
-        self._open = _OpenEvent(self._new_event_id(), wall_ns, mono_ns, value_kg, start_quality)
+        start_quality = StartQuality.STALE_READING if value_kg is None else StartQuality.FRESH
+        self._open = _OpenEvent(
+            event_id=self._new_event_id(),
+            start_wall_ns=wall_ns,
+            start_mono_ns=mono_ns,
+            start_value_kg=value_kg,
+            start_quality=start_quality,
+        )
         return self._started(self._open)
 
     def _started(self, opened: _OpenEvent) -> StartedEvent:
         return StartedEvent(
-            opened.event_id,
-            self._tank_id,
-            self._kind,
-            opened.start_wall_ns,
-            opened.start_value_kg,
-            opened.start_quality,
+            event_id=opened.event_id,
+            tank_id=self._tank_id,
+            kind=self._kind,
+            start_wall_ns=opened.start_wall_ns,
+            start_value_kg=opened.start_value_kg,
+            start_quality=opened.start_quality,
         )
 
     def _close(
@@ -109,22 +119,22 @@ class SignalEventTracker:
         duration_ns = None if opened.start_mono_ns is None else end_mono_ns - opened.start_mono_ns
         return [
             ClosedEvent(
-                opened.event_id,
-                self._tank_id,
-                self._kind,
-                opened.start_wall_ns,
-                opened.start_value_kg,
-                end_wall_ns,
-                end_value_kg,
-                duration_ns,
-                opened.start_quality,
-                end_quality,
+                event_id=opened.event_id,
+                tank_id=self._tank_id,
+                kind=self._kind,
+                start_wall_ns=opened.start_wall_ns,
+                start_value_kg=opened.start_value_kg,
+                end_wall_ns=end_wall_ns,
+                end_value_kg=end_value_kg,
+                duration_ns=duration_ns,
+                start_quality=opened.start_quality,
+                end_quality=end_quality,
             )
         ]
 
 
 def _end_quality(value_kg: int | None) -> EndQuality:
-    return "stale_reading" if value_kg is None else "fresh"
+    return EndQuality.STALE_READING if value_kg is None else EndQuality.FRESH
 
 
 class Tank:
@@ -135,10 +145,10 @@ class Tank:
         self._dispense: bool | None = None
         self._refill: bool | None = None
         self._dispense_events = SignalEventTracker(
-            tank_id, "dispense", new_event_id, unknown_since_wall_ns
+            tank_id, EventKind.DISPENSE, new_event_id, unknown_since_wall_ns
         )
         self._refill_events = SignalEventTracker(
-            tank_id, "refill", new_event_id, unknown_since_wall_ns
+            tank_id, EventKind.REFILL, new_event_id, unknown_since_wall_ns
         )
 
     def on_signals(
@@ -146,13 +156,35 @@ class Tank:
     ) -> list[TankOutput]:
         outputs: list[TankOutput] = []
         if signals.dispense != self._dispense:
-            outputs.append(SignalChange(self.tank_id, "dispense", signals.dispense, self._dispense))
+            outputs.append(
+                SignalChange(
+                    tank_id=self.tank_id,
+                    signal=EventKind.DISPENSE,
+                    active=signals.dispense,
+                    previous=self._dispense,
+                )
+            )
             self._dispense = signals.dispense
         if signals.refill != self._refill:
-            outputs.append(SignalChange(self.tank_id, "refill", signals.refill, self._refill))
+            outputs.append(
+                SignalChange(
+                    tank_id=self.tank_id,
+                    signal=EventKind.REFILL,
+                    active=signals.refill,
+                    previous=self._refill,
+                )
+            )
             self._refill = signals.refill
-        outputs.extend(self._dispense_events.on_state(signals.dispense, wall_ns, mono_ns, value_kg))
-        outputs.extend(self._refill_events.on_state(signals.refill, wall_ns, mono_ns, value_kg))
+        outputs.extend(
+            self._dispense_events.on_state(
+                active=signals.dispense, wall_ns=wall_ns, mono_ns=mono_ns, value_kg=value_kg
+            )
+        )
+        outputs.extend(
+            self._refill_events.on_state(
+                active=signals.refill, wall_ns=wall_ns, mono_ns=mono_ns, value_kg=value_kg
+            )
+        )
         return outputs
 
     def on_signals_lost(
@@ -160,10 +192,14 @@ class Tank:
     ) -> list[ClosedEvent]:
         self._dispense = None
         self._refill = None
-        return self._close_open_events(last_fresh_wall_ns, last_fresh_mono_ns, "signal_lost")
+        return self._close_open_events(
+            last_fresh_wall_ns, last_fresh_mono_ns, EndQuality.SIGNAL_LOST
+        )
 
     def on_shutdown(self, last_fresh_wall_ns: int, last_fresh_mono_ns: int) -> list[ClosedEvent]:
-        return self._close_open_events(last_fresh_wall_ns, last_fresh_mono_ns, "service_stopped")
+        return self._close_open_events(
+            last_fresh_wall_ns, last_fresh_mono_ns, EndQuality.SERVICE_STOPPED
+        )
 
     def _close_open_events(
         self, last_fresh_wall_ns: int, last_fresh_mono_ns: int, end_quality: EndQuality

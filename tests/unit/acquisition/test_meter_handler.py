@@ -1,9 +1,6 @@
 import queue
-from collections.abc import Iterator, MutableMapping
+from collections.abc import MutableMapping
 from typing import Any
-
-import pytest
-from structlog.testing import capture_logs
 
 from dms.acquisition.meters.dgtp import encode_dgtp_frame, parse_dgtp_frame
 from dms.acquisition.meters.handler import MeterFrameHandler
@@ -15,12 +12,6 @@ from dms.messages import EngineMessage, MeterReading
 OVERLOAD = b"OL,        ,kg"
 UNDERLOAD = b"UL,        ,kg"
 WEIGHT = encode_dgtp_frame(40).removesuffix(b"\r\n")
-
-
-@pytest.fixture
-def logs() -> Iterator[list[MutableMapping[str, Any]]]:
-    with capture_logs() as captured:
-        yield captured
 
 
 def build() -> tuple[MeterFrameHandler, queue.Queue[EngineMessage]]:
@@ -37,7 +28,9 @@ def test_weight_is_published_with_the_given_stamps() -> None:
     outcome = handler.handle(WEIGHT, 11, 22)
 
     assert outcome is FrameOutcome.ACCEPTED
-    assert messages.get_nowait() == MeterReading("m1", 40, 11, 22)
+    assert messages.get_nowait() == MeterReading(
+        meter_id="m1", value_kg=40, wall_ns=11, mono_ns=22
+    )
 
 
 def test_unparsable_frame_is_rejected_and_not_published() -> None:

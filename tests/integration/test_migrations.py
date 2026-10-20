@@ -20,7 +20,7 @@ from dms.persistence.schema import (
     load_migrations,
     package_schema_version,
 )
-from tests.database import migrate_as_owner
+from tests.database import migrate_as_owner, set_role
 
 
 def owner_connection(database_url: str) -> psycopg.Connection[TupleRow]:
@@ -30,7 +30,9 @@ def owner_connection(database_url: str) -> psycopg.Connection[TupleRow]:
 
 
 def table_names(connection: psycopg.Connection[TupleRow]) -> set[str]:
-    rows = connection.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'dms'").fetchall()
+    rows = connection.execute(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'dms'"
+    ).fetchall()
     return {row[0] for row in rows}
 
 
@@ -132,10 +134,6 @@ def test_schema_check_fails_for_other_major(fresh_database: str) -> None:
             check_schema_compatible(connection)
 
         assert raised.value.database_version == SchemaVersion(2, 0, 0)
-
-
-def set_role(connection: psycopg.Connection[TupleRow], role: str) -> None:
-    connection.execute(f"SET ROLE {role}")
 
 
 def test_api_role_cannot_insert_meter_reading(

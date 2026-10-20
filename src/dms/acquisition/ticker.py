@@ -2,8 +2,9 @@ import queue
 import threading
 from collections.abc import Callable
 
-from dms.acquisition.clock import NS_PER_S, Clock
+from dms.clock import Clock
 from dms.messages import EngineMessage, Tick
+from dms.units import NS_PER_S
 
 
 class TickTimer:

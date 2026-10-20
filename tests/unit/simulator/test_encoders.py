@@ -1,4 +1,5 @@
 from dms.acquisition.meters.dgtp import parse_dgtp_frame
+from dms.config.models import MeterFormat
 from dms.simulator.encoders import (
     METER_ENCODERS,
     banner_lines,
@@ -30,7 +31,7 @@ def test_temperatures_frame_without_sensors() -> None:
 
 
 def test_meter_frame_round_trips_through_the_parser() -> None:
-    frame = METER_ENCODERS["dgtp"](19_980)
+    frame = METER_ENCODERS[MeterFormat.DGTP](19_980)
 
     assert parse_dgtp_frame(frame[:-2]) == 19_980
 
@@ -69,7 +70,7 @@ def test_encode_sample_returns_device_id_and_bytes() -> None:
 
     assert encode_sample(MeterSample(0, "meter-1", 20_000), layout) == (
         "meter-1",
-        METER_ENCODERS["dgtp"](20_000),
+        METER_ENCODERS[MeterFormat.DGTP](20_000),
     )
     assert encode_sample(PinsSample(0, "arduino", ((4, 1),)), layout) == (
         "arduino",
