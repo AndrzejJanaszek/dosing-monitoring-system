@@ -146,12 +146,16 @@ class Tank:
     ) -> list[TankOutput]:
         outputs: list[TankOutput] = []
         if signals.dispense != self._dispense:
-            outputs.append(SignalChange(self.tank_id, "dispense", signals.dispense, self._dispense))
+            outputs.append(
+                SignalChange(self.tank_id, "dispense", signals.dispense, self._dispense)
+            )
             self._dispense = signals.dispense
         if signals.refill != self._refill:
             outputs.append(SignalChange(self.tank_id, "refill", signals.refill, self._refill))
             self._refill = signals.refill
-        outputs.extend(self._dispense_events.on_state(signals.dispense, wall_ns, mono_ns, value_kg))
+        outputs.extend(
+            self._dispense_events.on_state(signals.dispense, wall_ns, mono_ns, value_kg)
+        )
         outputs.extend(self._refill_events.on_state(signals.refill, wall_ns, mono_ns, value_kg))
         return outputs
 

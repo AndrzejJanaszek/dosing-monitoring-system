@@ -27,7 +27,9 @@ def test_broken_migration_files_refuse_startup(monkeypatch: pytest.MonkeyPatch) 
     ]
 
 
-def test_malformed_database_schema_version_refuses_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_malformed_database_schema_version_refuses_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def malformed_version(_connection: object) -> None:
         raise SchemaVersionFormatError("schema version '0.0.0.1' must look like MAJOR.MINOR.PATCH")
 

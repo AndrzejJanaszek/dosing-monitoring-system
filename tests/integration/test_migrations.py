@@ -30,7 +30,9 @@ def owner_connection(database_url: str) -> psycopg.Connection[TupleRow]:
 
 
 def table_names(connection: psycopg.Connection[TupleRow]) -> set[str]:
-    rows = connection.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'dms'").fetchall()
+    rows = connection.execute(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'dms'"
+    ).fetchall()
     return {row[0] for row in rows}
 
 

@@ -81,7 +81,9 @@ def stop_run(connection: psycopg.Connection[TupleRow], run_id: int) -> None:
     connection.execute("UPDATE dms.run SET stopped_at = now() WHERE id = %s", [run_id])
 
 
-def sync_silos(connection: psycopg.Connection[TupleRow], silos: Sequence[SiloConfig]) -> SyncResult:
+def sync_silos(
+    connection: psycopg.Connection[TupleRow], silos: Sequence[SiloConfig]
+) -> SyncResult:
     return _sync_catalog(
         connection,
         table="silo",
@@ -91,7 +93,9 @@ def sync_silos(connection: psycopg.Connection[TupleRow], silos: Sequence[SiloCon
     )
 
 
-def sync_tanks(connection: psycopg.Connection[TupleRow], tanks: Sequence[TankConfig]) -> SyncResult:
+def sync_tanks(
+    connection: psycopg.Connection[TupleRow], tanks: Sequence[TankConfig]
+) -> SyncResult:
     return _sync_catalog(
         connection,
         table="tank",

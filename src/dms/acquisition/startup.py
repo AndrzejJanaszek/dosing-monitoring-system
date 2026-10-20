@@ -69,7 +69,8 @@ def run_startup_sequence(
             events.EVENT_CRASH_CLOSED,
             count=len(crashed_events),
             events=[
-                {"event_id": str(item.event_id), "tank_id": item.tank_id} for item in crashed_events
+                {"event_id": str(item.event_id), "tank_id": item.tank_id}
+                for item in crashed_events
             ],
         )
     return run_id

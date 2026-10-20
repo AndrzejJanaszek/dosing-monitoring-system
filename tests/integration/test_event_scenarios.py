@@ -136,7 +136,9 @@ def oracle_events(
     scenario: Scenario, samples: list[Sample], start_ns: int = 0
 ) -> list[ExpectedEvent]:
     return ordered(
-        expected_events(scenario, samples, max_reading_age_ns=MAX_READING_AGE_NS, start_ns=start_ns)
+        expected_events(
+            scenario, samples, max_reading_age_ns=MAX_READING_AGE_NS, start_ns=start_ns
+        )
     )
 
 

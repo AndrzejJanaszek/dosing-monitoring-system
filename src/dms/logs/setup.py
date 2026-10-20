@@ -9,7 +9,9 @@ type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 type LogFormat = Literal["auto", "json", "console"]
 
 
-def configure_logging(level: LogLevel, log_format: LogFormat, stream: TextIO | None = None) -> None:
+def configure_logging(
+    level: LogLevel, log_format: LogFormat, stream: TextIO | None = None
+) -> None:
     output = stream if stream is not None else sys.stdout
     shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,

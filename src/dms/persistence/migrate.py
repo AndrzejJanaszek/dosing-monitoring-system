@@ -104,7 +104,9 @@ def _check_applied_migrations(
     applied_rows: Sequence[TupleRow], migrations: Sequence[Migration]
 ) -> None:
     known = {migration.version: migration for migration in migrations}
-    unknown = [f"{version:04d}_{name}" for version, name, _ in applied_rows if version not in known]
+    unknown = [
+        f"{version:04d}_{name}" for version, name, _ in applied_rows if version not in known
+    ]
     if unknown:
         raise DatabaseAheadError(unknown)
     changed = [

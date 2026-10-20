@@ -25,7 +25,9 @@ from dms.simulator.encoders import banner_lines, encode_pins_frame, encode_tempe
         ),
         (
             b"[WARNING] Default conversation time. PRECISION not set or wrong value.",
-            BoardLogLine("WARNING", "Default conversation time. PRECISION not set or wrong value."),
+            BoardLogLine(
+                "WARNING", "Default conversation time. PRECISION not set or wrong value."
+            ),
         ),
         (
             b"[DEBUG]: i:0 Address: 28A8F126AB240B1C temp: 21.50",

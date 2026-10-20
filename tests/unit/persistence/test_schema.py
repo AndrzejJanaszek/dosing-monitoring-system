@@ -15,7 +15,9 @@ from dms.persistence.schema import (
 
 
 def write_migration(directory: Path, file_name: str, change: str = "minor") -> None:
-    (directory / file_name).write_text(f"-- schema-change: {change}\nSELECT 1;\n", encoding="utf-8")
+    (directory / file_name).write_text(
+        f"-- schema-change: {change}\nSELECT 1;\n", encoding="utf-8"
+    )
 
 
 def test_packaged_migrations_load_and_start_with_init() -> None:

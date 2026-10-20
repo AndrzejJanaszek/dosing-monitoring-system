@@ -41,7 +41,10 @@ def test_complete_pins_frame_publishes_signal_states_with_given_stamps() -> None
 
     assert outcome is FrameOutcome.ACCEPTED
     assert messages.get_nowait() == SignalStates(
-        (TankSignals(1, dispense=True, refill=False), TankSignals(2, dispense=False, refill=False)),
+        (
+            TankSignals(1, dispense=True, refill=False),
+            TankSignals(2, dispense=False, refill=False),
+        ),
         11,
         22,
     )

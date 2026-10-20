@@ -26,7 +26,9 @@ def scenario_with(
     start_masses_kg: dict[int, int] | None = None,
     duration_s: float | None = None,
 ) -> Scenario:
-    return Scenario("test", layout or one_tank_layout(), start_masses_kg, tuple(events), duration_s)
+    return Scenario(
+        "test", layout or one_tank_layout(), start_masses_kg, tuple(events), duration_s
+    )
 
 
 def dispense(

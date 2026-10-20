@@ -356,7 +356,9 @@ def test_active_signal_after_loss_starts_an_orphaned_event_at_the_last_fresh_sna
 
     started = events_only(feed(tank, True, False, 9, value_kg=400))
 
-    assert started == [StartedEvent(event_id(2), 3, "dispense", 2_004 * SECOND_NS, None, "unknown")]
+    assert started == [
+        StartedEvent(event_id(2), 3, "dispense", 2_004 * SECOND_NS, None, "unknown")
+    ]
 
 
 def test_inactive_signal_after_loss_starts_no_event() -> None:

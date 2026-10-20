@@ -245,7 +245,9 @@ def test_lost_signals_are_detected_even_when_the_meter_is_silent() -> None:
 
     closed = silo.on_tick(tick(20.0))
 
-    assert [item.end_quality for item in closed if isinstance(item, ClosedEvent)] == ["signal_lost"]
+    assert [item.end_quality for item in closed if isinstance(item, ClosedEvent)] == [
+        "signal_lost"
+    ]
 
 
 def test_snapshot_ends_the_stale_signals_state() -> None:

@@ -98,7 +98,9 @@ def writer_connection(fresh_database: str) -> psycopg.Connection[TupleRow]:
     return connection
 
 
-def build_store(database_url: str, connection: psycopg.Connection[TupleRow]) -> PostgresRecordStore:
+def build_store(
+    database_url: str, connection: psycopg.Connection[TupleRow]
+) -> PostgresRecordStore:
     sync_tanks(connection, [tank(1)])
     run_id = start_run(connection, "1.2.3", {})
     return PostgresRecordStore(connection, lambda: connect_as(database_url, WRITER_ROLE), run_id)
@@ -360,7 +362,10 @@ def test_writer_survives_terminated_connection(
         writer.step()
 
     with psycopg.connect(fresh_database) as reader:
-        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [(100,), (120,)]
+        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [
+            (100,),
+            (120,),
+        ]
     assert [entry["event"] for entry in captured] == [
         events.DB_WRITE_ERROR,
         events.DB_WRITE_RECOVERED,
@@ -784,7 +789,10 @@ def test_batch_with_a_rejected_record_stores_the_other_records_and_keeps_going(
     writer.step()
 
     with psycopg.connect(fresh_database) as reader:
-        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [(100,), (110,)]
+        assert rows(reader, "SELECT value_kg FROM dms.meter_reading ORDER BY t") == [
+            (100,),
+            (110,),
+        ]
     assert [row[4] for row in event_rows(fresh_database)] == ["in_progress"]
     (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
     assert rejected["log_level"] == "critical"
