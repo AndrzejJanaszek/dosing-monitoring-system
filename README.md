@@ -151,7 +151,7 @@ PGPASSWORD=dms DMS_CONFIG_DIR=config/example uv run dms-migrate
 
 ## Running acquisition locally
 
-The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port, logs every change of a tank signal (`signal.changed`) stores each dispense and refill of a tank in `dms.tank_event` (see [Tank events](#tank-events)) and stores the temperatures of the board's sensors (see [Temperatures](#temperatures)). Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
+The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port, logs every change of a tank signal (`signal.changed`), stores each dispense and refill of a tank in `dms.tank_event` (see [Tank events](#tank-events)) and stores the temperatures of the board's sensors (see [Temperatures](#temperatures)). Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
 
 ```bash
 scripts/db-reset.sh

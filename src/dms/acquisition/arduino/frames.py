@@ -1,5 +1,4 @@
 import json
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -126,4 +125,4 @@ def _parse_temperature_entry(raw_entry: object) -> TemperatureFrameEntry | None:
 def _is_storable_temperature(raw_value: object) -> bool:
     if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
         return False
-    return math.isfinite(raw_value) and abs(raw_value) <= MAX_TEMPERATURE_ABS_C
+    return abs(raw_value) <= MAX_TEMPERATURE_ABS_C

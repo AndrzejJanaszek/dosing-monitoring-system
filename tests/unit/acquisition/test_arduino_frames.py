@@ -123,6 +123,10 @@ def test_empty_temperatures_frame_is_accepted() -> None:
         pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":true}]}', id="value-as-boolean"),
         pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":NaN}]}', id="value-nan"),
         pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":Infinity}]}', id="value-infinite"),
+        pytest.param(
+            b'{"temps":[{"a":"28A8F126AB240B1C","t":1' + b"0" * 400 + b"}]}",
+            id="value-huge-integer",
+        ),
         pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":1000.0}]}', id="value-too-large"),
         pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":999.995}]}', id="value-rounds-up"),
         pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":-1000}]}', id="value-too-small"),
