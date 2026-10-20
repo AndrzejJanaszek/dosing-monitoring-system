@@ -502,3 +502,51 @@ def test_leg_outside_the_allowed_range_is_rejected(tmp_path: Path, leg: str) -> 
     (error,) = errors_of(tmp_path)
 
     assert error.startswith("acquisition.toml: temperature_sensors[0].leg:")
+
+
+def test_temperature_settings_have_defaults(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT)
+
+    settings = load_acquisition(tmp_path).temperatures
+
+    assert (settings.record_interval_s, settings.max_reading_age_s) == (1.0, 5.0)
+    assert (settings.min_valid_c, settings.max_valid_c) == (-40.0, 80.0)
+
+
+def test_temperature_settings_are_read_from_their_section(tmp_path: Path) -> None:
+    section = (
+        "\n[temperatures]\nrecord_interval_s = 10.0\nmax_reading_age_s = 3.0\n"
+        "min_valid_c = -20.5\nmax_valid_c = 60.0\n"
+    )
+    write(tmp_path, "acquisition.toml", BASE_PLANT + section)
+
+    settings = load_acquisition(tmp_path).temperatures
+
+    assert (settings.record_interval_s, settings.max_reading_age_s) == (10.0, 3.0)
+    assert (settings.min_valid_c, settings.max_valid_c) == (-20.5, 60.0)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("record_interval_s = 0", id="zero-interval"),
+        pytest.param("max_reading_age_s = -1.0", id="negative-age"),
+        pytest.param("min_valid_c = -1000.0", id="minimum-below-column-range"),
+        pytest.param("max_valid_c = 1000.0", id="maximum-above-column-range"),
+    ],
+)
+def test_invalid_temperature_setting_is_rejected(tmp_path: Path, line: str) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + f"\n[temperatures]\n{line}\n")
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith(f"acquisition.toml: temperatures.{line.split(' ', maxsplit=1)[0]}:")
+
+
+def test_valid_range_with_minimum_not_below_maximum_is_reported(tmp_path: Path) -> None:
+    section = "\n[temperatures]\nmin_valid_c = 30.0\nmax_valid_c = 30.0\n"
+    write(tmp_path, "acquisition.toml", BASE_PLANT + section)
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: temperatures.min_valid_c: must be below max_valid_c"
+    ]
