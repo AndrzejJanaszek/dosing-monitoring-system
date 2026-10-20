@@ -154,11 +154,9 @@ def test_configured_temperature_sensors_follow_the_layout() -> None:
         SignalBoard(
             sensors=(
                 TemperatureSensor(
-                    id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=2, leg=1
+                    id=1, address="28A8F126AB240B1C", start_c=20.0, silo_id=2, leg=1
                 ),
-                TemperatureSensor(
-                    id=2, address="28FF4A7C61160398", temperature_c=20.0, name="Hala"
-                ),
+                TemperatureSensor(id=2, address="28FF4A7C61160398", start_c=20.0, name="Hala"),
             )
         ),
     )
@@ -181,7 +179,7 @@ def test_sensor_outside_the_configuration_is_not_listed() -> None:
         SignalBoard(
             sensors=(
                 TemperatureSensor(
-                    id=1, address="28A8F126AB240B1C", temperature_c=20.0, configured=False
+                    id=1, address="28A8F126AB240B1C", start_c=20.0, configured=False
                 ),
             )
         ),

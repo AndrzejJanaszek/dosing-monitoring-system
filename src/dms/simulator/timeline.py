@@ -3,7 +3,13 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 
-from dms.simulator.layout import SiloLayout
+from dms.simulator.layout import (
+    ErrorCode,
+    FixedValue,
+    Missing,
+    SiloLayout,
+    TemperatureSensor,
+)
 from dms.simulator.plant_state import indication_kg, pin_levels, silo_mass_kg
 from dms.simulator.scenario_model import ScenarioData
 from dms.units import NS_PER_S
@@ -24,10 +30,17 @@ class PinsSample:
 
 
 @dataclass(frozen=True, slots=True)
+class SimulatedReading:
+    address: str
+    value_c: float | None
+    error_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class TemperaturesSample:
     at_ns: int
     board_id: str
-    readings: tuple[tuple[str, float], ...]
+    readings: tuple[SimulatedReading, ...]
 
 
 type Sample = MeterSample | PinsSample | TemperaturesSample
@@ -90,7 +103,23 @@ def _pins_sample(scenario: ScenarioData, at_ns: int, state_ns: int) -> Sample:
     return PinsSample(at_ns, scenario.layout.board.id, pin_levels(scenario, state_ns))
 
 
-def _temperatures_sample(scenario: ScenarioData, at_ns: int, _state_ns: int) -> Sample:
+def _temperatures_sample(scenario: ScenarioData, at_ns: int, state_ns: int) -> Sample:
     board = scenario.layout.board
-    readings = tuple((sensor.address, sensor.temperature_c) for sensor in board.sensors)
+    readings = tuple(
+        reading
+        for sensor in board.sensors
+        if (reading := _sensor_reading(sensor, state_ns)) is not None
+    )
     return TemperaturesSample(at_ns, board.id, readings)
+
+
+def _sensor_reading(sensor: TemperatureSensor, state_ns: int) -> SimulatedReading | None:
+    match sensor.fault_at(state_ns):
+        case Missing():
+            return None
+        case ErrorCode(code=code):
+            return SimulatedReading(sensor.address, None, code)
+        case FixedValue(value_c=value_c):
+            return SimulatedReading(sensor.address, value_c, None)
+        case None:
+            return SimulatedReading(sensor.address, sensor.value_c(state_ns), None)

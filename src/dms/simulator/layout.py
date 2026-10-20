@@ -1,9 +1,11 @@
+import itertools
 from collections import Counter
 from dataclasses import dataclass, field
 
 from dms.config.models import (
     MAX_SMALLINT,
     MAX_TANKS_PER_SILO,
+    MAX_TEMPERATURE_ABS_C,
     MIN_LEG,
     PIN_LEVELS,
     SENSOR_ADDRESS_PATTERN,
@@ -12,6 +14,7 @@ from dms.config.models import (
 )
 from dms.domain.events import EventKind
 from dms.simulator.errors import ScenarioError
+from dms.units import NS_PER_S
 
 DEFAULT_METER_RATE_HZ = 10.0
 DEFAULT_DIVISION_KG = 20
@@ -26,6 +29,7 @@ MIN_DEVICE_PERIOD_S = 0.001
 MAX_METER_RATE_HZ = 1 / MIN_DEVICE_PERIOD_S
 MIN_ID = 1
 MIN_TANKS_PER_SILO = 1
+SECONDS_PER_MINUTE = 60
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -71,11 +75,46 @@ class SiloLayout:
         return self.name if self.name is not None else f"Silos {self.id}"
 
 
+@dataclass(frozen=True, slots=True)
+class ErrorCode:
+    code: str
+
+
+@dataclass(frozen=True, slots=True)
+class FixedValue:
+    value_c: float
+
+
+@dataclass(frozen=True, slots=True)
+class Missing:
+    pass
+
+
+type FaultKind = ErrorCode | FixedValue | Missing
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SensorFault:
+    start_s: float
+    end_s: float
+    kind: FaultKind
+
+    @property
+    def start_ns(self) -> int:
+        return round(self.start_s * NS_PER_S)
+
+    @property
+    def end_ns(self) -> int:
+        return round(self.end_s * NS_PER_S)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TemperatureSensor:
     id: int
     address: str
-    temperature_c: float
+    start_c: float
+    rate_c_per_min: float = 0.0
+    faults: tuple[SensorFault, ...] = ()
     silo_id: int | None = None
     leg: int | None = None
     name: str | None = None
@@ -84,6 +123,15 @@ class TemperatureSensor:
     @property
     def display_name(self) -> str:
         return self.name if self.name is not None else f"Czujnik {self.id}"
+
+    def value_c(self, state_ns: int) -> float:
+        return self.start_c + self.rate_c_per_min * state_ns / (NS_PER_S * SECONDS_PER_MINUTE)
+
+    def fault_at(self, state_ns: int) -> FaultKind | None:
+        for fault in self.faults:
+            if fault.start_ns <= state_ns < fault.end_ns:
+                return fault.kind
+        return None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -243,6 +291,32 @@ def _sensor_errors(layout: PlantLayout) -> list[str]:
 
         if sensor.leg is not None and not MIN_LEG <= sensor.leg <= MAX_SMALLINT:
             errors.append(f"{path}.leg: {sensor.leg} is outside {MIN_LEG}..{MAX_SMALLINT}")
+
+        errors.extend(_fault_errors(path, sensor.faults))
+    return errors
+
+
+def _fault_errors(path: str, faults: tuple[SensorFault, ...]) -> list[str]:
+    errors: list[str] = []
+    for index, fault in enumerate(faults):
+        if fault.end_s <= fault.start_s or fault.start_s < 0:
+            errors.append(f"{path}.faults[{index}]: end must be after a non-negative start")
+        if isinstance(fault.kind, ErrorCode) and not fault.kind.code:
+            errors.append(f"{path}.faults[{index}].kind: error code is empty")
+        if (
+            isinstance(fault.kind, FixedValue)
+            and not abs(fault.kind.value_c) <= MAX_TEMPERATURE_ABS_C
+        ):
+            errors.append(
+                f"{path}.faults[{index}].kind: {fault.kind.value_c:g} is outside"
+                f" ±{MAX_TEMPERATURE_ABS_C:g} °C"
+            )
+
+    for (_, earlier), (later_index, later) in itertools.combinations(
+        sorted(enumerate(faults), key=lambda item: item[1].start_s), 2
+    ):
+        if later.start_s < earlier.end_s:
+            errors.append(f"{path}.faults[{later_index}]: overlaps another fault")
     return errors
 
 

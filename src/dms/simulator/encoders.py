@@ -4,7 +4,13 @@ from collections.abc import Callable, Mapping
 from dms.acquisition.meters.dgtp import encode_dgtp_frame
 from dms.config.models import MeterFormat
 from dms.simulator.layout import PlantLayout, SignalBoard
-from dms.simulator.timeline import MeterSample, PinsSample, Sample, TemperaturesSample
+from dms.simulator.timeline import (
+    MeterSample,
+    PinsSample,
+    Sample,
+    SimulatedReading,
+    TemperaturesSample,
+)
 
 METER_ENCODERS: Mapping[MeterFormat, Callable[[int], bytes]] = {
     MeterFormat.DGTP: encode_dgtp_frame
@@ -20,11 +26,8 @@ def encode_pins_frame(levels: tuple[tuple[int, int], ...]) -> bytes:
     return json.dumps(payload, separators=BOARD_JSON_SEPARATORS).encode("ascii") + BOARD_FRAME_END
 
 
-def encode_temperatures_frame(readings: tuple[tuple[str, float], ...]) -> bytes:
-    items = ",".join(
-        f'{{"a":{json.dumps(address)},"t":{temperature_c:{TEMPERATURE_FORMAT}}}}'
-        for address, temperature_c in readings
-    )
+def encode_temperatures_frame(readings: tuple[SimulatedReading, ...]) -> bytes:
+    items = ",".join(_encode_reading(reading) for reading in readings)
     return f'{{"temps":[{items}]}}'.encode("ascii") + BOARD_FRAME_END
 
 
@@ -54,3 +57,10 @@ def encode_sample(sample: Sample, layout: PlantLayout) -> tuple[str, bytes]:
             return sample.board_id, encode_pins_frame(sample.levels)
         case TemperaturesSample():
             return sample.board_id, encode_temperatures_frame(sample.readings)
+
+
+def _encode_reading(reading: SimulatedReading) -> str:
+    address = json.dumps(reading.address)
+    if reading.value_c is None:
+        return f'{{"a":{address},"t":null,"e":{json.dumps(reading.error_code)}}}'
+    return f'{{"a":{address},"t":{reading.value_c:{TEMPERATURE_FORMAT}}}}'
