@@ -93,7 +93,9 @@ def test_state_time_can_hold_the_final_state() -> None:
 def test_temperature_sample_carries_sensor_readings() -> None:
     layout = PlantLayout(
         (SiloLayout(id=1, tanks=(tank(1, 4, 5),)),),
-        SignalBoard(sensors=(TemperatureSensor("28A8F126AB240B1C", 21.5),)),
+        SignalBoard(
+            sensors=(TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=21.5),)
+        ),
     )
 
     sample = next(

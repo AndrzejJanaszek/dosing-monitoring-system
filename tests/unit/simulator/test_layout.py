@@ -72,7 +72,8 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
     ),
     "sensor-address-malformed": (
         lambda: PlantLayout(
-            one_tank_layout().silos, SignalBoard(sensors=(TemperatureSensor("28a8", 20.0),))
+            one_tank_layout().silos,
+            SignalBoard(sensors=(TemperatureSensor(id=1, address="28a8", temperature_c=20.0),)),
         ),
         "board.sensors[0].address",
     ),
@@ -81,12 +82,70 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
             one_tank_layout().silos,
             SignalBoard(
                 sensors=(
-                    TemperatureSensor("28A8F126AB240B1C", 20.0),
-                    TemperatureSensor("28A8F126AB240B1C", 21.0),
+                    TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=20.0),
+                    TemperatureSensor(id=2, address="28A8F126AB240B1C", temperature_c=21.0),
                 )
             ),
         ),
         "board.sensors[1].address: duplicate",
+    ),
+    "duplicate-sensor-id": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(
+                    TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=20.0),
+                    TemperatureSensor(id=1, address="28FF4A7C61160398", temperature_c=21.0),
+                )
+            ),
+        ),
+        "board.sensors[1].id: duplicate sensor id 1",
+    ),
+    "sensor-id-out-of-range": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(TemperatureSensor(id=0, address="28A8F126AB240B1C", temperature_c=20.0),)
+            ),
+        ),
+        "board.sensors[0].id: 0 is outside",
+    ),
+    "sensor-in-unknown-silo": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(
+                    TemperatureSensor(
+                        id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=9
+                    ),
+                )
+            ),
+        ),
+        "board.sensors[0].silo_id: unknown silo 9",
+    ),
+    "sensor-leg-without-silo": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(
+                    TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=20.0, leg=1),
+                )
+            ),
+        ),
+        "board.sensors[0].leg: leg requires a silo_id",
+    ),
+    "sensor-leg-below-one": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(
+                    TemperatureSensor(
+                        id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=1, leg=0
+                    ),
+                )
+            ),
+        ),
+        "board.sensors[0].leg: 0 is below 1",
     ),
     "silo-id-out-of-range": (
         lambda: PlantLayout((SiloLayout(id=0, tanks=(tank(1, 4, 5),)),)),

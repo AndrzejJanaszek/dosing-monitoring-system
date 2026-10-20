@@ -47,8 +47,8 @@ def test_banner_with_two_sensors() -> None:
     board = SignalBoard(
         pins=(4, 5),
         sensors=(
-            TemperatureSensor("28A8F126AB240B1C", 21.5),
-            TemperatureSensor("28FF4A7C61160398", 22.25),
+            TemperatureSensor(id=1, address="28A8F126AB240B1C", temperature_c=21.5),
+            TemperatureSensor(id=2, address="28FF4A7C61160398", temperature_c=22.25),
         ),
     )
 

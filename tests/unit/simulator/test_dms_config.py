@@ -6,7 +6,14 @@ from dms.config.loader import load_acquisition
 from dms.config.models import BoardConfig, validate_acquisition_rules
 from dms.simulator.catalog import TWO_SILOS, TWO_TANKS
 from dms.simulator.dms_config import acquisition_config, render_acquisition_toml
-from dms.simulator.layout import MeterDevice, PlantLayout, SiloLayout, TankWiring
+from dms.simulator.layout import (
+    MeterDevice,
+    PlantLayout,
+    SignalBoard,
+    SiloLayout,
+    TankWiring,
+    TemperatureSensor,
+)
 from tests.unit.simulator.builders import tank
 
 
@@ -139,3 +146,47 @@ def test_pin_shared_by_two_tanks_breaks_the_rules() -> None:
     assert mutated(tanks=(config.tanks[0], clashing)) == [
         "tanks[1].refill.pin: pin 4 is already assigned to tanks[0].dispense"
     ]
+
+
+def test_configured_temperature_sensors_follow_the_layout() -> None:
+    layout = PlantLayout(
+        TWO_SILOS.silos,
+        SignalBoard(
+            sensors=(
+                TemperatureSensor(
+                    id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=2, leg=1
+                ),
+                TemperatureSensor(
+                    id=2, address="28FF4A7C61160398", temperature_c=20.0, name="Hala"
+                ),
+            )
+        ),
+    )
+
+    config = acquisition_config(layout, Path("/tmp/ports"))
+
+    assert [
+        (sensor.id, sensor.name, sensor.address, sensor.silo_id, sensor.leg)
+        for sensor in config.temperature_sensors
+    ] == [
+        (1, "Czujnik 1", "28A8F126AB240B1C", 2, 1),
+        (2, "Hala", "28FF4A7C61160398", None, None),
+    ]
+    assert validate_acquisition_rules(config) == []
+
+
+def test_sensor_outside_the_configuration_is_not_listed() -> None:
+    layout = PlantLayout(
+        TWO_SILOS.silos,
+        SignalBoard(
+            sensors=(
+                TemperatureSensor(
+                    id=1, address="28A8F126AB240B1C", temperature_c=20.0, configured=False
+                ),
+            )
+        ),
+    )
+
+    config = acquisition_config(layout, Path("/tmp/ports"))
+
+    assert config.temperature_sensors == ()
