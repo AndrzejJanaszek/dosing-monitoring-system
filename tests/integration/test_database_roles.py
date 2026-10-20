@@ -1,15 +1,13 @@
 import psycopg
 import pytest
-from psycopg import errors, sql
+from psycopg import errors
 from psycopg.rows import TupleRow
+
+from tests.database import set_role
 
 LOGIN_ROLES = ("dms_owner", "dms_writer", "dms_api")
 ALL_ROLES = (*LOGIN_ROLES, "dms_read")
 ROLES_WITHOUT_DDL_IN_DMS = ("dms_writer", "dms_read", "dms_api")
-
-
-def set_role(connection: psycopg.Connection[TupleRow], role: str) -> None:
-    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
 
 
 def test_roles_have_expected_attributes(dms_connection: psycopg.Connection[TupleRow]) -> None:

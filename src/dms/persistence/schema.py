@@ -2,21 +2,28 @@ import hashlib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import Literal, NamedTuple, cast
+from typing import NamedTuple
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import TupleRow
-
-type ChangeKind = Literal["major", "minor", "patch"]
 
 SCHEMA_NAME = "dms"
 MIGRATION_TABLE = "schema_migration"
 MIGRATION_FILE_PATTERN = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 CHANGE_HEADER_PATTERN = re.compile(r"^-- schema-change: (major|minor|patch)$")
 SCHEMA_VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+LATEST_SCHEMA_VERSION_SQL = "SELECT schema_version FROM {table} ORDER BY version DESC LIMIT 1"
 FIRST_MIGRATION_VERSION = 1
+
+
+class ChangeKind(StrEnum):
+    MAJOR = "major"
+    MINOR = "minor"
+    PATCH = "patch"
 
 
 class SchemaVersionFormatError(Exception):
@@ -42,9 +49,9 @@ class SchemaVersion(NamedTuple):
         return cls(major, minor, patch)
 
     def bumped(self, change: ChangeKind) -> SchemaVersion:
-        if change == "major":
+        if change == ChangeKind.MAJOR:
             return SchemaVersion(self.major + 1, 0, 0)
-        if change == "minor":
+        if change == ChangeKind.MINOR:
             return SchemaVersion(self.major, self.minor + 1, 0)
         return SchemaVersion(self.major, self.minor, self.patch + 1)
 
@@ -52,7 +59,7 @@ class SchemaVersion(NamedTuple):
 INITIAL_VERSION = SchemaVersion(0, 0, 0)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Migration:
     version: int
     name: str
@@ -67,7 +74,9 @@ class MigrationFilesError(Exception):
 
 
 class SchemaIncompatibleError(Exception):
-    def __init__(self, database_version: SchemaVersion | None, package_version: SchemaVersion):
+    def __init__(
+        self, database_version: SchemaVersion | None, package_version: SchemaVersion
+    ) -> None:
         found = "no schema_migration table" if database_version is None else str(database_version)
         super().__init__(
             f"database schema {found} is not compatible with package {package_version}"
@@ -98,16 +107,16 @@ def load_migrations(directory: Traversable | None = None) -> list[Migration]:
             )
         raw = entry.read_bytes()
         try:
-            sql = raw.decode("utf-8")
+            sql_text = raw.decode("utf-8")
         except UnicodeDecodeError as error:
             raise MigrationFilesError(f"{entry.name}: not valid UTF-8 ({error})") from error
-        change = _read_change_kind(entry.name, sql)
+        change = _read_change_kind(entry.name, sql_text)
         current_version = current_version.bumped(change)
         migrations.append(
             Migration(
                 version=expected_number,
                 name=match.group(2),
-                sql=sql,
+                sql=sql_text,
                 checksum=hashlib.sha256(raw).hexdigest(),
                 change=change,
                 schema_version=current_version,
@@ -116,14 +125,14 @@ def load_migrations(directory: Traversable | None = None) -> list[Migration]:
     return migrations
 
 
-def _read_change_kind(file_name: str, sql: str) -> ChangeKind:
-    first_line = sql.splitlines()[0] if sql else ""
+def _read_change_kind(file_name: str, sql_text: str) -> ChangeKind:
+    first_line = sql_text.splitlines()[0] if sql_text else ""
     match = CHANGE_HEADER_PATTERN.match(first_line)
     if match is None:
         raise MigrationFilesError(
             f"{file_name}: first line must be '-- schema-change: major|minor|patch'"
         )
-    return cast(ChangeKind, match.group(1))
+    return ChangeKind(match.group(1))
 
 
 def package_schema_version(migrations: Sequence[Migration] | None = None) -> SchemaVersion:
@@ -142,7 +151,9 @@ def database_schema_version(connection: psycopg.Connection[TupleRow]) -> SchemaV
     if table_exists is None or not table_exists[0]:
         return None
     row = connection.execute(
-        f"SELECT schema_version FROM {SCHEMA_NAME}.{MIGRATION_TABLE} ORDER BY version DESC LIMIT 1"
+        sql.SQL(LATEST_SCHEMA_VERSION_SQL).format(
+            table=sql.Identifier(SCHEMA_NAME, MIGRATION_TABLE)
+        )
     ).fetchone()
     return SchemaVersion.parse(row[0]) if row is not None else INITIAL_VERSION
 

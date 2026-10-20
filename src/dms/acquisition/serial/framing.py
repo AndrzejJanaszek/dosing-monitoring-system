@@ -4,7 +4,11 @@ class Framer:
         self._end = end
         self._max_frame_length = max_frame_length
         self._buffer = b""
-        self.rejected_count = 0
+        self._rejected_count = 0
+
+    @property
+    def rejected_count(self) -> int:
+        return self._rejected_count
 
     def feed(self, chunk: bytes) -> list[bytes]:
         self._buffer += chunk
@@ -14,7 +18,7 @@ class Framer:
             if frame is None:
                 break
             if len(frame) > self._max_frame_length:
-                self.rejected_count += 1
+                self._rejected_count += 1
             else:
                 frames.append(frame)
         self._drop_overlong_buffer()
@@ -42,4 +46,4 @@ class Framer:
     def _drop_overlong_buffer(self) -> None:
         if len(self._buffer) - len(self._start) > self._max_frame_length:
             self._buffer = b""
-            self.rejected_count += 1
+            self._rejected_count += 1

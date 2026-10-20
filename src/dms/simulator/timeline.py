@@ -2,14 +2,11 @@ import heapq
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
 
-from dms.acquisition.clock import NS_PER_S
 from dms.simulator.layout import SiloLayout
 from dms.simulator.plant_state import indication_kg, pin_levels, silo_mass_kg
-
-if TYPE_CHECKING:
-    from dms.simulator.scenario import Scenario
+from dms.simulator.scenario_model import ScenarioData
+from dms.units import NS_PER_S
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +32,7 @@ class TemperaturesSample:
 
 type Sample = MeterSample | PinsSample | TemperaturesSample
 
-type SampleBuilder = Callable[[Scenario, int, int], Sample]
+type SampleBuilder = Callable[[ScenarioData, int, int], Sample]
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +42,7 @@ class _Device:
 
 
 def samples_from(
-    scenario: Scenario, start_ns: int, state_time: Callable[[int], int]
+    scenario: ScenarioData, start_ns: int, state_time: Callable[[int], int]
 ) -> Iterator[Sample]:
     devices = _devices(scenario)
     queue = [(start_ns, order, 0) for order in range(len(devices))]
@@ -58,7 +55,7 @@ def samples_from(
         heapq.heapreplace(queue, (start_ns + next_index * device.period_ns, order, next_index))
 
 
-def scenario_samples(scenario: Scenario) -> Iterator[Sample]:
+def scenario_samples(scenario: ScenarioData) -> Iterator[Sample]:
     for sample in samples_from(scenario, 0, _same_time):
         if sample.at_ns > scenario.duration_ns:
             return
@@ -73,7 +70,7 @@ def _period_ns(period_s: float) -> int:
     return round(period_s * NS_PER_S)
 
 
-def _devices(scenario: Scenario) -> list[_Device]:
+def _devices(scenario: ScenarioData) -> list[_Device]:
     board = scenario.layout.board
     meters = [
         _Device(_period_ns(1 / silo.meter.rate_hz), partial(_meter_sample, silo))
@@ -84,16 +81,16 @@ def _devices(scenario: Scenario) -> list[_Device]:
     return [*meters, pins, temperatures]
 
 
-def _meter_sample(silo: SiloLayout, scenario: Scenario, at_ns: int, state_ns: int) -> Sample:
+def _meter_sample(silo: SiloLayout, scenario: ScenarioData, at_ns: int, state_ns: int) -> Sample:
     mass_kg = silo_mass_kg(scenario, silo.id, state_ns)
     return MeterSample(at_ns, silo.meter_id, indication_kg(mass_kg, silo.meter))
 
 
-def _pins_sample(scenario: Scenario, at_ns: int, state_ns: int) -> Sample:
+def _pins_sample(scenario: ScenarioData, at_ns: int, state_ns: int) -> Sample:
     return PinsSample(at_ns, scenario.layout.board.id, pin_levels(scenario, state_ns))
 
 
-def _temperatures_sample(scenario: Scenario, at_ns: int, state_ns: int) -> Sample:
+def _temperatures_sample(scenario: ScenarioData, at_ns: int, _state_ns: int) -> Sample:
     board = scenario.layout.board
     readings = tuple((sensor.address, sensor.temperature_c) for sensor in board.sensors)
     return TemperaturesSample(at_ns, board.id, readings)

@@ -7,16 +7,11 @@ from uuid import UUID
 
 import pytest
 
-from dms.acquisition.app import build_silos
-from dms.acquisition.arduino.handler import ArduinoFrameHandler
-from dms.acquisition.arduino.mapping import SignalMapper
-from dms.acquisition.clock import NS_PER_S
+from dms.acquisition.app import board_wiring, build_silos, meter_wiring
 from dms.acquisition.engine import Engine
-from dms.acquisition.meters.dgtp import parse_dgtp_frame
-from dms.acquisition.meters.handler import MeterFrameHandler
 from dms.acquisition.serial.adapter import FrameHandler
 from dms.acquisition.serial.framing import Framer
-from dms.domain.events import ClosedEvent, StartedEvent
+from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import WriterRecord
 from dms.messages import EngineMessage, Tick
 from dms.simulator.catalog import SCENARIOS
@@ -25,6 +20,7 @@ from dms.simulator.encoders import encode_banner, encode_sample
 from dms.simulator.expected_events import ExpectedEvent, expected_events
 from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import MeterSample, PinsSample, Sample, samples_from, scenario_samples
+from dms.units import NS_PER_S
 
 MAX_READING_AGE_NS = NS_PER_S
 MAX_SIGNAL_AGE_NS = NS_PER_S
@@ -53,28 +49,11 @@ def run_pipeline(
         ),
         stop_event=threading.Event(),
     )
-    ports: dict[str, tuple[Framer, FrameHandler]] = {
-        meter.id: (
-            Framer(meter.frame_start.encode(), meter.frame_end.encode(), meter.max_frame_length),
-            MeterFrameHandler(
-                meter_id=meter.id,
-                port_name=meter.port,
-                parser=parse_dgtp_frame,
-                out_queue=messages,
-            ),
-        )
-        for meter in config.meters
-    }
     board = config.board
-    ports[board.id] = (
-        Framer(board.frame_start.encode(), board.frame_end.encode(), board.max_frame_length),
-        ArduinoFrameHandler(
-            board_id=board.id,
-            port_name=board.port,
-            mapper=SignalMapper(config.tanks),
-            out_queue=messages,
-        ),
-    )
+    ports: dict[str, tuple[Framer, FrameHandler]] = {
+        meter.id: meter_wiring(meter, messages) for meter in config.meters
+    }
+    ports[board.id] = board_wiring(board, config.tanks, messages)
 
     board_framer, board_handler = ports[board.id]
     for frame in board_framer.feed(encode_banner(scenario.layout.board)):
@@ -109,19 +88,19 @@ def closed_events(records: list[WriterRecord]) -> list[ClosedEvent]:
 
 def as_expected(event: ClosedEvent) -> ExpectedEvent:
     return ExpectedEvent(
-        event.tank_id,
-        event.kind,
-        event.start_wall_ns,
-        event.end_wall_ns,
-        event.start_value_kg,
-        event.end_value_kg,
-        event.start_quality,
-        event.end_quality,
+        tank_id=event.tank_id,
+        kind=event.kind,
+        start_ns=event.start_wall_ns,
+        end_ns=event.end_wall_ns,
+        start_value_kg=event.start_value_kg,
+        end_value_kg=event.end_value_kg,
+        start_quality=event.start_quality,
+        end_quality=event.end_quality,
     )
 
 
 def is_fresh(event: ExpectedEvent) -> bool:
-    return (event.start_quality, event.end_quality) == ("fresh", "fresh")
+    return (event.start_quality, event.end_quality) == (StartQuality.FRESH, EndQuality.FRESH)
 
 
 def ordered(events: list[ExpectedEvent]) -> list[ExpectedEvent]:
@@ -183,7 +162,11 @@ def test_events_of_every_catalogue_scenario_match_the_oracle(
         event.start_value_kg is not None and event.end_value_kg is not None for event in expected
     )
     assert_every_close_follows_its_start(records)
-    assert not [r for r in records if isinstance(r, StartedEvent) and r.start_quality == "unknown"]
+    assert not [
+        r
+        for r in records
+        if isinstance(r, StartedEvent) and r.start_quality is StartQuality.UNKNOWN
+    ]
 
 
 def test_service_started_in_the_middle_of_an_event_gives_an_unknown_start_event(
@@ -203,12 +186,20 @@ def test_service_started_in_the_middle_of_an_event_gives_an_unknown_start_event(
     expected = oracle_events(scenario, samples)
     assert system_events(records) == expected
     first, *rest = expected
-    assert (first.start_ns, first.start_quality, first.start_value_kg) == (0, "unknown", None)
-    assert first.end_quality == "fresh"
+    assert (first.start_ns, first.start_quality, first.start_value_kg) == (
+        0,
+        StartQuality.UNKNOWN,
+        None,
+    )
+    assert first.end_quality is EndQuality.FRESH
     assert first.end_value_kg is not None
     assert len(rest) == 2
     assert all(is_fresh(event) for event in rest)
-    orphaned = [r for r in records if isinstance(r, StartedEvent) and r.start_quality == "unknown"]
+    orphaned = [
+        r
+        for r in records
+        if isinstance(r, StartedEvent) and r.start_quality is StartQuality.UNKNOWN
+    ]
     assert [(r.start_wall_ns, r.start_value_kg) for r in orphaned] == [(0, None)]
     assert_every_close_follows_its_start(records)
 
@@ -216,12 +207,12 @@ def test_service_started_in_the_middle_of_an_event_gives_an_unknown_start_event(
 @pytest.mark.parametrize(
     ("edge", "qualities", "empty_value"),
     [
-        ("start", ("stale_reading", "fresh"), "start_value_kg"),
-        ("end", ("fresh", "stale_reading"), "end_value_kg"),
+        ("start", (StartQuality.STALE_READING, EndQuality.FRESH), "start_value_kg"),
+        ("end", (StartQuality.FRESH, EndQuality.STALE_READING), "end_value_kg"),
     ],
 )
 def test_missing_meter_samples_at_an_edge_give_an_incomplete_event(
-    edge: str, qualities: tuple[str, str], empty_value: str, tmp_path: Path
+    edge: str, qualities: tuple[StartQuality, EndQuality], empty_value: str, tmp_path: Path
 ) -> None:
     scenario = SCENARIOS["dispense-single"]
     clean_samples = list(scenario_samples(scenario))
@@ -250,7 +241,10 @@ def test_missing_meter_samples_at_both_edges_report_both_stale_edges(tmp_path: P
 
     (event,) = system_events(records)
     assert event == oracle_events(scenario, samples)[0]
-    assert (event.start_quality, event.end_quality) == ("stale_reading", "stale_reading")
+    assert (event.start_quality, event.end_quality) == (
+        StartQuality.STALE_READING,
+        EndQuality.STALE_READING,
+    )
     assert (event.start_value_kg, event.end_value_kg) == (None, None)
 
 
@@ -277,16 +271,23 @@ def test_lost_signals_in_the_middle_of_an_event_end_it_and_orphan_the_rest(
 
     lost, orphaned = system_events(records)
     assert lost == ExpectedEvent(
-        1,
-        "dispense",
-        clean.start_ns,
-        last_fresh_ns,
-        clean.start_value_kg,
-        None,
-        "fresh",
-        "signal_lost",
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_ns=clean.start_ns,
+        end_ns=last_fresh_ns,
+        start_value_kg=clean.start_value_kg,
+        end_value_kg=None,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.SIGNAL_LOST,
     )
     assert orphaned == ExpectedEvent(
-        1, "dispense", last_fresh_ns, clean.end_ns, None, clean.end_value_kg, "unknown", "fresh"
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_ns=last_fresh_ns,
+        end_ns=clean.end_ns,
+        start_value_kg=None,
+        end_value_kg=clean.end_value_kg,
+        start_quality=StartQuality.UNKNOWN,
+        end_quality=EndQuality.FRESH,
     )
     assert_every_close_follows_its_start(records)

@@ -1,10 +1,9 @@
 import threading
-from collections.abc import Iterator, MutableMapping
+from collections.abc import MutableMapping
 from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from structlog.testing import capture_logs
 
 from dms.acquisition import app as app_module
 from dms.acquisition.app import AcquisitionApp, build_silos
@@ -15,15 +14,17 @@ from dms.config.models import (
     BoardConfig,
     EngineConfig,
     MeterConfig,
+    MeterFormat,
     SiloConfig,
 )
 from dms.logs import events
 from dms.messages import MeterReading, Tick
-from dms.persistence.writer import PostgresRecordStore, Writer
+from dms.persistence.record_store import PostgresRecordStore
+from dms.persistence.writer import Writer
+from dms.units import NS_PER_S
 from tests.unit.acquisition.builders import tank_config
 
 RUN_ID = 7
-SECOND_NS = 1_000_000_000
 
 
 class FinishedThreadTarget:
@@ -32,7 +33,7 @@ class FinishedThreadTarget:
 
 
 class FakeWriter(FinishedThreadTarget):
-    def __init__(self, flushed: bool) -> None:
+    def __init__(self, *, flushed: bool) -> None:
         self.flushed = flushed
 
 
@@ -47,18 +48,12 @@ def stopped_runs(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
-@pytest.fixture
-def logs() -> Iterator[list[MutableMapping[str, Any]]]:
-    with capture_logs() as captured:
-        yield captured
-
-
-def build(writer_flushed: bool = True) -> AcquisitionApp:
+def build(*, writer_flushed: bool = True) -> AcquisitionApp:
     acquisition = AcquisitionApp(
         adapters=[],
         timer=cast(TickTimer, FinishedThreadTarget()),
         engine=cast(Engine, FinishedThreadTarget()),
-        writer=cast(Writer, FakeWriter(writer_flushed)),
+        writer=cast(Writer, FakeWriter(flushed=writer_flushed)),
         store=cast(PostgresRecordStore, FakeStore()),
         run_id=RUN_ID,
         producers_stop=threading.Event(),
@@ -115,7 +110,7 @@ def test_build_silos_assigns_each_silo_its_own_tanks_and_config_ages() -> None:
                 id="m1",
                 port="/dev/m1",
                 baudrate=9600,
-                format="dgtp",
+                format=MeterFormat.DGTP,
                 frame_end="\r\n",
                 reconnect_delay_s=5.0,
                 silence_timeout_s=5.0,
@@ -124,7 +119,7 @@ def test_build_silos_assigns_each_silo_its_own_tanks_and_config_ages() -> None:
                 id="m2",
                 port="/dev/m2",
                 baudrate=9600,
-                format="dgtp",
+                format=MeterFormat.DGTP,
                 frame_end="\r\n",
                 reconnect_delay_s=5.0,
                 silence_timeout_s=5.0,
@@ -150,7 +145,9 @@ def test_build_silos_assigns_each_silo_its_own_tanks_and_config_ages() -> None:
     )
 
     assert {meter_id: silo.silo_id for meter_id, silo in silos.items()} == {"m1": 1, "m2": 2}
-    silos["m1"].on_reading(MeterReading("m1", 500, 0, 10 * SECOND_NS))
-    assert silos["m1"].on_tick(Tick(0, 12 * SECOND_NS)) != []
-    assert silos["m1"].on_tick(Tick(0, 12 * SECOND_NS + 1)) == []
-    assert silos["m1"].signals_stale_since_mono_ns == 200 + round(0.5 * SECOND_NS)
+    silos["m1"].on_reading(
+        MeterReading(meter_id="m1", value_kg=500, wall_ns=0, mono_ns=10 * NS_PER_S)
+    )
+    assert silos["m1"].on_tick(Tick(0, 12 * NS_PER_S)) != []
+    assert silos["m1"].on_tick(Tick(0, 12 * NS_PER_S + 1)) == []
+    assert silos["m1"].signals_stale_since_mono_ns == 200 + round(0.5 * NS_PER_S)

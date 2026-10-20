@@ -120,7 +120,7 @@ def test_badly_named_file_is_rejected(tmp_path: Path) -> None:
         ("0.0.0", "1.0.0", False),
     ],
 )
-def test_compatibility_rule(database: str, package: str, compatible: bool) -> None:
+def test_compatibility_rule(database: str, package: str, *, compatible: bool) -> None:
     assert is_compatible(SchemaVersion.parse(database), SchemaVersion.parse(package)) is compatible
 
 

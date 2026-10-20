@@ -217,7 +217,7 @@ The simulator package can compute the events a scenario should produce from its 
 
 ### Simulator scenarios
 
-A scenario (`src/dms/simulator/scenario.py`) is a plant layout (silos, tanks, signal module pins and polarity, meters), the starting masses and a list of `Dispense`/`Refill` events on tanks. The meter readings and the Arduino pin states are both computed from the same events, so the frames are consistent. The catalog is `src/dms/simulator/catalog.py`; to add a scenario, add it to the list passed to `build_catalog` there (or to one of the helper groups in that list).
+A scenario (`src/dms/simulator/scenario.py`, data and events in `scenario_model.py`) is a plant layout (silos, tanks, signal module pins and polarity, meters), the starting masses and a list of `Dispense`/`Refill` events on tanks. The meter readings and the Arduino pin states are both computed from the same events, so the frames are consistent. The catalog is `src/dms/simulator/catalog.py`; to add a scenario, add it to the list passed to `build_catalog` there (or to one of the helper groups in that list).
 
 Scenarios describe only normal operation (golden flow). A scenario is validated when it is built: physically impossible or abnormal definitions (overlapping events of the same type, a dispense that empties the silo, durations or rates outside the normal range, an event during the initial quiet period, and so on) raise `ScenarioError` listing every problem, so such a scenario cannot be run and the catalog does not import.
 

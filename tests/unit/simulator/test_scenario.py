@@ -2,15 +2,11 @@ from collections.abc import Callable
 
 import pytest
 
-from dms.acquisition.clock import NS_PER_S
+from dms.simulator.errors import ScenarioError
 from dms.simulator.layout import MeterDevice, PlantLayout, SiloLayout
-from dms.simulator.scenario import (
-    Dispense,
-    Refill,
-    Scenario,
-    ScenarioError,
-    SimulatedTankEvent,
-)
+from dms.simulator.scenario import Scenario
+from dms.simulator.scenario_model import Dispense, Refill, SimulatedTankEvent
+from dms.units import NS_PER_S
 from tests.unit.simulator.builders import (
     dispense,
     refill,
@@ -19,7 +15,9 @@ from tests.unit.simulator.builders import (
     two_tank_layout,
 )
 
-TWO_SILOS = PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(2, (tank(2, 6, 7),))))
+TWO_SILOS = PlantLayout(
+    (SiloLayout(id=1, tanks=(tank(1, 4, 5),)), SiloLayout(id=2, tanks=(tank(2, 6, 7),)))
+)
 
 
 def test_valid_scenario_uses_default_start_mass_and_tail() -> None:
@@ -41,49 +39,77 @@ def test_scenario_without_events_needs_explicit_duration() -> None:
 
 
 INVALID_SCENARIOS: dict[str, tuple[Callable[[], object], str]] = {
-    "S1": (
+    "duplicate-silo-id": (
         lambda: scenario_with(
-            layout=PlantLayout((SiloLayout(1, (tank(1, 4, 5),)), SiloLayout(1, (tank(1, 6, 7),)))),
+            layout=PlantLayout(
+                (
+                    SiloLayout(id=1, tanks=(tank(1, 4, 5),)),
+                    SiloLayout(id=1, tanks=(tank(1, 6, 7),)),
+                )
+            ),
             duration_s=30,
         ),
         "duplicate",
     ),
-    "S2": (
-        lambda: scenario_with(layout=PlantLayout((SiloLayout(1, ()),)), duration_s=30),
+    "silo-without-tanks": (
+        lambda: scenario_with(layout=PlantLayout((SiloLayout(id=1, tanks=()),)), duration_s=30),
         "tanks: 0 tanks",
     ),
-    "S3": (lambda: scenario_with(dispense(tank_id=9)), "events[0].tank_id: unknown tank 9"),
-    "S4-order": (lambda: scenario_with(dispense(40, 10)), "end must be after start"),
-    "S4-mass": (lambda: scenario_with(dispense(mass_kg=0)), "end must be after start"),
-    "S5-duration": (lambda: scenario_with(dispense(10, 11, 100)), "dispense duration 1"),
-    "S5-rate": (lambda: scenario_with(dispense(10, 40, 100)), "dispense rate"),
-    "S5-refill-duration": (lambda: scenario_with(refill(10, 40, 600)), "refill duration 30"),
-    "S6": (lambda: scenario_with(dispense(2, 32)), "quiet period"),
-    "S7-overlap": (lambda: scenario_with(dispense(10, 40), dispense(30, 60)), "events[1]"),
-    "S7-touch": (lambda: scenario_with(dispense(10, 40), dispense(40, 70)), "events[1]"),
-    "S7-gap": (lambda: scenario_with(dispense(10, 40), dispense(41, 71)), "events[1]"),
-    "S8": (
+    "event-on-unknown-tank": (
+        lambda: scenario_with(dispense(tank_id=9)),
+        "events[0].tank_id: unknown tank 9",
+    ),
+    "end-before-start": (lambda: scenario_with(dispense(40, 10)), "end must be after start"),
+    "zero-mass": (lambda: scenario_with(dispense(mass_kg=0)), "end must be after start"),
+    "dispense-too-short": (lambda: scenario_with(dispense(10, 11, 100)), "dispense duration 1"),
+    "dispense-rate-too-high": (lambda: scenario_with(dispense(10, 40, 100)), "dispense rate"),
+    "refill-too-long": (lambda: scenario_with(refill(10, 40, 600)), "refill duration 30"),
+    "event-too-soon-after-start": (lambda: scenario_with(dispense(2, 32)), "quiet period"),
+    "events-overlap-on-tank": (
+        lambda: scenario_with(dispense(10, 40), dispense(30, 60)),
+        "events[1]",
+    ),
+    "events-touch-on-tank": (
+        lambda: scenario_with(dispense(10, 40), dispense(40, 70)),
+        "events[1]",
+    ),
+    "events-too-close-on-tank": (
+        lambda: scenario_with(dispense(10, 40), dispense(41, 71)),
+        "events[1]",
+    ),
+    "events-overlap-on-silo": (
         lambda: scenario_with(
             dispense(10, 40), dispense(20, 50, tank_id=2), layout=two_tank_layout()
         ),
         "same silo",
     ),
-    "S9-start": (lambda: scenario_with(dispense(), start_masses_kg={1: -1}), "start mass -1"),
-    "S9-time": (
+    "negative-start-mass": (
+        lambda: scenario_with(dispense(), start_masses_kg={1: -1}),
+        "start mass -1",
+    ),
+    "mass-drops-below-zero": (
         lambda: scenario_with(dispense(), start_masses_kg={1: 500}),
         "mass drops below zero",
     ),
-    "S10-short": (lambda: scenario_with(dispense(), duration_s=30), "ends before the last event"),
-    "S10-missing": (scenario_with, "required when there are no events"),
-    "S11": (
+    "duration-before-last-event": (
+        lambda: scenario_with(dispense(), duration_s=30),
+        "ends before the last event",
+    ),
+    "duration-missing": (scenario_with, "required when there are no events"),
+    "mass-does-not-fit-division": (
         lambda: scenario_with(
             dispense(),
-            layout=PlantLayout((SiloLayout(1, (tank(1, 4, 5),), MeterDevice(division_kg=1)),)),
+            layout=PlantLayout(
+                (SiloLayout(id=1, tanks=(tank(1, 4, 5),), meter=MeterDevice(division_kg=1)),)
+            ),
             start_masses_kg={1: 123_456_789},
         ),
         "does not fit",
     ),
-    "S12": (lambda: scenario_with(dispense(), start_masses_kg={7: 1}), "unknown silo 7"),
+    "start-mass-for-unknown-silo": (
+        lambda: scenario_with(dispense(), start_masses_kg={7: 1}),
+        "unknown silo 7",
+    ),
 }
 
 
@@ -109,7 +135,13 @@ def test_dispense_and_refill_overlap_on_one_tank_is_legal() -> None:
 
 
 def test_dispenses_on_different_silos_may_overlap() -> None:
-    Scenario("test", TWO_SILOS, None, (dispense(10, 40), dispense(20, 50, tank_id=2)), None)
+    Scenario(
+        name="test",
+        layout=TWO_SILOS,
+        start_masses_kg=None,
+        events=(dispense(10, 40), dispense(20, 50, tank_id=2)),
+        duration_s=None,
+    )
 
 
 def test_event_kinds_and_signs() -> None:

@@ -7,8 +7,9 @@ from psycopg import sql
 from psycopg.rows import TupleRow
 
 from dms.config.loader import ConfigError, load_shared
+from dms.exit_codes import EXIT_CONFIG_ERROR, EXIT_FAILURE, EXIT_OK
 from dms.logs import events
-from dms.logs.setup import configure_logging
+from dms.logs.setup import LogFormat, LogLevel, configure_logging
 from dms.persistence.connection import build_conninfo
 from dms.persistence.schema import (
     MIGRATION_TABLE,
@@ -21,8 +22,6 @@ from dms.persistence.schema import (
 
 OWNER_ROLE = "dms_owner"
 MIGRATION_LOCK_KEY = 7_156_001
-EXIT_FAILURE = 1
-EXIT_CONFIG_ERROR = 2
 
 MIGRATION_TABLE_SQL = sql.SQL(
     "CREATE TABLE IF NOT EXISTS {table} ("
@@ -43,6 +42,8 @@ APPLIED_MIGRATIONS_SQL = sql.SQL(
     "SELECT version, name, checksum FROM {table} ORDER BY version"
 ).format(table=sql.Identifier(SCHEMA_NAME, MIGRATION_TABLE))
 
+logger = structlog.get_logger()
+
 
 class ChecksumMismatchError(Exception):
     def __init__(self, files: list[str]) -> None:
@@ -61,7 +62,6 @@ class DatabaseAheadError(Exception):
 def apply_migrations(
     connection: psycopg.Connection[TupleRow], migrations: Sequence[Migration]
 ) -> list[Migration]:
-    logger = structlog.get_logger()
     connection.execute("SELECT pg_advisory_lock(%s)", [MIGRATION_LOCK_KEY])
     try:
         with connection.transaction():
@@ -122,17 +122,18 @@ def main() -> int:
     try:
         shared_config = load_shared()
     except ConfigError as error:
+        configure_logging(LogLevel.INFO, LogFormat.AUTO)
+        logger.critical(events.CONFIG_INVALID, errors=error.errors)
         for line in error.errors:
             print(line, file=sys.stderr)
         return EXIT_CONFIG_ERROR
     configure_logging(shared_config.logging.level, shared_config.logging.format)
-    logger = structlog.get_logger()
     try:
         migrations = load_migrations()
         with psycopg.connect(
             build_conninfo(shared_config.database, OWNER_ROLE), autocommit=True
-        ) as conn:
-            apply_migrations(conn, migrations)
+        ) as connection:
+            apply_migrations(connection, migrations)
     except MigrationFilesError as error:
         logger.critical(events.DB_STARTUP_FAILED, step="load_migrations", error=str(error))
     except ChecksumMismatchError as error:
@@ -142,5 +143,5 @@ def main() -> int:
     except psycopg.Error as error:
         logger.critical(events.DB_STARTUP_FAILED, step="migrate", error=str(error))
     else:
-        return 0
+        return EXIT_OK
     return EXIT_FAILURE

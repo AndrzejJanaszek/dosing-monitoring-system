@@ -1,9 +1,8 @@
 import queue
-from collections.abc import Iterator, MutableMapping
+from collections.abc import MutableMapping
 from typing import Any
 
 import pytest
-from structlog.testing import capture_logs
 
 from dms.acquisition.arduino.handler import ArduinoFrameHandler
 from dms.acquisition.arduino.mapping import SignalMapper
@@ -15,12 +14,6 @@ from tests.unit.acquisition.builders import tank_config
 ALL_PINS = b'{"pins":{"4":0,"5":1,"6":1,"7":1}}'
 PINS_WITHOUT_FIVE = b'{"pins":{"4":0,"6":1,"7":1}}'
 PINS_WITHOUT_FIVE_AND_SIX = b'{"pins":{"4":0,"7":1}}'
-
-
-@pytest.fixture
-def logs() -> Iterator[list[MutableMapping[str, Any]]]:
-    with capture_logs() as captured:
-        yield captured
 
 
 def build() -> tuple[ArduinoFrameHandler, queue.Queue[EngineMessage]]:

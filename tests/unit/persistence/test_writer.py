@@ -1,16 +1,19 @@
 import queue
 import threading
-from collections.abc import Iterator, MutableMapping, Sequence
+from collections.abc import MutableMapping, Sequence
 from typing import Any
 from uuid import UUID
 
 import pytest
-from structlog.testing import capture_logs
 
-from dms.domain.events import ClosedEvent, StartedEvent
+from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import MeterRecord, WriterRecord
 from dms.logs import events
-from dms.persistence.writer import DataStoreError, TransientStoreError, Writer, WriteResult
+from dms.persistence.record_store import DataStoreError, TransientStoreError, WriteResult
+from dms.persistence.writer import Writer
+from tests.fakes import ManualClock
+
+TEST_RETRY_DELAY_S = 3.0
 
 
 class FakeStore:
@@ -60,23 +63,17 @@ def build(
 ) -> tuple[Writer, queue.Queue[WriterRecord], threading.Event]:
     in_queue: queue.Queue[WriterRecord] = queue.Queue()
     stop_event = threading.Event()
-    clock_values = iter(range(0, 1000, 3))
+    clock = ManualClock()
     writer = Writer(
         in_queue=in_queue,
         store=store,
         stop_event=stop_event,
         max_batch=max_batch,
-        retry_delay_s=0,
-        wait=lambda _seconds: False,
-        monotonic=lambda: float(next(clock_values)),
+        retry_delay_s=TEST_RETRY_DELAY_S,
+        wait=clock.waiter(),
+        clock=clock,
     )
     return writer, in_queue, stop_event
-
-
-@pytest.fixture
-def logs() -> Iterator[list[MutableMapping[str, Any]]]:
-    with capture_logs() as captured:
-        yield captured
 
 
 def test_queued_records_are_written_as_one_batch() -> None:
@@ -124,7 +121,7 @@ def test_transient_error_reconnects_and_retries_same_batch(
     assert store.batches == [[record(1)]]
     assert store.reconnects == 2
     assert [entry["event"] for entry in logs] == [events.DB_WRITE_ERROR, events.DB_WRITE_RECOVERED]
-    assert logs[1]["outage_s"] == 3.0
+    assert logs[1]["outage_s"] == 2 * TEST_RETRY_DELAY_S
 
 
 def test_other_error_is_fatal_and_logged(logs: list[MutableMapping[str, Any]]) -> None:
@@ -215,11 +212,29 @@ def test_skipped_duplicates_are_logged(logs: list[MutableMapping[str, Any]]) -> 
 
 
 def started_event() -> StartedEvent:
-    return StartedEvent(UUID(int=1), 1, "dispense", 10, 500, "fresh")
+    return StartedEvent(
+        event_id=UUID(int=1),
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=10,
+        start_value_kg=500,
+        start_quality=StartQuality.FRESH,
+    )
 
 
 def closed_event() -> ClosedEvent:
-    return ClosedEvent(UUID(int=1), 1, "dispense", 10, 500, 20, 400, 10, "fresh", "fresh")
+    return ClosedEvent(
+        event_id=UUID(int=1),
+        tank_id=1,
+        kind=EventKind.DISPENSE,
+        start_wall_ns=10,
+        start_value_kg=500,
+        end_wall_ns=20,
+        end_value_kg=400,
+        duration_ns=10,
+        start_quality=StartQuality.FRESH,
+        end_quality=EndQuality.FRESH,
+    )
 
 
 def test_mixed_records_are_written_as_one_batch() -> None:

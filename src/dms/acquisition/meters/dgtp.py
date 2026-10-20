@@ -39,7 +39,7 @@ def _parse_weight(weight: str) -> int | None:
     return round(Decimal(weight.strip()))
 
 
-def encode_dgtp_frame(value_kg: int, stable: bool = True) -> bytes:
+def encode_dgtp_frame(value_kg: int, *, stable: bool = True) -> bytes:
     weight = str(value_kg)
     if len(weight) > WEIGHT_FIELD_WIDTH:
         raise ValueError(f"{value_kg} does not fit in {WEIGHT_FIELD_WIDTH} characters")

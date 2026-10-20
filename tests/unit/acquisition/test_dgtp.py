@@ -64,7 +64,7 @@ def test_invalid_frame_is_rejected_without_exception(frame: bytes) -> None:
 def test_parser_and_encoder_agree_over_value_range() -> None:
     for value in range(-9999, 100_000, 7):
         for stable in (True, False):
-            encoded = encode_dgtp_frame(value, stable)
+            encoded = encode_dgtp_frame(value, stable=stable)
 
             assert encoded.endswith(b"\r\n")
             assert parse_dgtp_frame(encoded.removesuffix(b"\r\n")) == value

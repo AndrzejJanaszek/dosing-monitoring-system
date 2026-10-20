@@ -13,7 +13,6 @@ from dms.persistence.catalog import (
     sync_tanks,
     tank_identity_violations,
 )
-from dms.persistence.connection import StartupError
 from dms.persistence.schema import (
     MigrationFilesError,
     SchemaIncompatibleError,
@@ -23,11 +22,16 @@ from dms.persistence.schema import (
 
 PACKAGE_NAME = "dms"
 
+logger = structlog.get_logger()
+
+
+class StartupError(Exception):
+    pass
+
 
 def run_startup_sequence(
     connection: psycopg.Connection[TupleRow], config: AcquisitionConfig
 ) -> int:
-    logger = structlog.get_logger()
     try:
         check_schema_compatible(connection)
     except SchemaIncompatibleError as error:
@@ -82,7 +86,7 @@ def _refuse_moved_tanks(
     violations = tank_identity_violations(connection, config.tanks)
     if not violations:
         return
-    structlog.get_logger().critical(
+    logger.critical(
         events.CATALOG_IDENTITY_VIOLATION,
         tanks=[
             {
@@ -94,5 +98,5 @@ def _refuse_moved_tanks(
         ],
     )
     raise StartupError(
-        "tanks moved to a different silo: " + ", ".join(str(m.tank_id) for m in violations)
+        "tanks moved to a different silo: " + ", ".join(str(move.tank_id) for move in violations)
     )

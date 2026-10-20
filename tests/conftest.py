@@ -1,12 +1,14 @@
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
 import structlog
 from psycopg.rows import TupleRow
+from structlog.testing import capture_logs
 from testcontainers.community.postgres import PostgresContainer
 
 from tests.database import migrate_as_owner, read_db_script, temporary_database
@@ -85,3 +87,9 @@ def restore_logging() -> Iterator[None]:
     root.handlers[:] = handlers
     root.setLevel(level)
     structlog.reset_defaults()
+
+
+@pytest.fixture
+def logs() -> Iterator[list[MutableMapping[str, Any]]]:
+    with capture_logs() as captured:
+        yield captured

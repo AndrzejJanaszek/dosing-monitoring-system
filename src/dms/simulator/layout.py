@@ -2,7 +2,14 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from dms.config.models import MAX_SMALLINT, BaudRate, MeterFormat
+from dms.config.models import (
+    MAX_SMALLINT,
+    MAX_TANKS_PER_SILO,
+    PIN_LEVELS,
+    BaudRate,
+    MeterFormat,
+)
+from dms.domain.events import EventKind
 from dms.simulator.errors import ScenarioError
 
 DEFAULT_METER_RATE_HZ = 10.0
@@ -14,18 +21,16 @@ DEFAULT_BOARD_PINS = (4, 5, 6, 7, 8, 9)
 DEFAULT_PINS_PERIOD_S = 0.25
 DEFAULT_TEMPERATURES_PERIOD_S = 1.0
 DEFAULT_ACTIVE_LEVEL = 0
-MAX_TANKS_PER_SILO = 2
 MIN_DEVICE_PERIOD_S = 0.001
 MAX_METER_RATE_HZ = 1 / MIN_DEVICE_PERIOD_S
 MIN_ID = 1
 MIN_TANKS_PER_SILO = 1
-PIN_LEVELS = (0, 1)
 SENSOR_ADDRESS_PATTERN = re.compile(r"^[0-9A-F]{16}$")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class MeterDevice:
-    format: MeterFormat = "dgtp"
+    format: MeterFormat = MeterFormat.DGTP
     rate_hz: float = DEFAULT_METER_RATE_HZ
     division_kg: int = DEFAULT_DIVISION_KG
     baudrate: BaudRate = DEFAULT_BAUDRATE
@@ -38,7 +43,7 @@ class Input:
     active_level: int = DEFAULT_ACTIVE_LEVEL
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TankWiring:
     id: int
     dispense: Input
@@ -50,7 +55,7 @@ class TankWiring:
         return self.name if self.name is not None else f"Zbiornik {self.id}"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SiloLayout:
     id: int
     tanks: tuple[TankWiring, ...]
@@ -72,7 +77,7 @@ class TemperatureSensor:
     temperature_c: float
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SignalBoard:
     id: str = DEFAULT_BOARD_ID
     pins: tuple[int, ...] = DEFAULT_BOARD_PINS
@@ -156,7 +161,10 @@ def _input_errors(layout: PlantLayout) -> list[str]:
     used_pins: dict[int, str] = {}
     for silo_index, silo in enumerate(layout.silos):
         for tank_index, tank in enumerate(silo.tanks):
-            for name, signal in (("dispense", tank.dispense), ("refill", tank.refill)):
+            for name, signal in (
+                (EventKind.DISPENSE, tank.dispense),
+                (EventKind.REFILL, tank.refill),
+            ):
                 path = f"silos[{silo_index}].tanks[{tank_index}].{name}"
 
                 if signal.pin in used_pins:

@@ -8,7 +8,7 @@ Each rule has a short statement, a one-sentence reason and a source (list at the
 
 `make check` must pass before a pull request: `ruff format --check`, `ruff check`, `mypy` (strict), `lint-imports`, `pytest`. CI runs the same command.
 
-Ruff checks, besides the default `E` and `F`: `W`, `I`, `B`, `UP`, `SIM`, `RUF`, `PL`, and (from the refactoring that follows this document) `E501` line length, `N` PEP 8 naming, `FBT` boolean arguments, `SLF` private access, `PT` pytest style, `ARG` unused arguments and `BLE` blind `except`. The same refactoring lowers `line-length` from 100 to 99.
+Ruff checks, besides the default `E` and `F`: `W`, `I`, `B`, `UP`, `SIM`, `RUF`, `PL`, `N` PEP 8 naming, `FBT` boolean arguments, `SLF` private access, `PT` pytest style, `ARG` unused arguments, `BLE` blind `except` and `E501` line length (`line-length = 99`).
 
 - **Formatting is ruff's.** Don't format by hand and don't argue about layout ruff decides. *Why:* one formatter removes style discussions from review. *Source:* [ruff], `pyproject.toml`.
 - **Lines are at most 99 characters, strings included.** Split a long message into parts. *Why:* a longer line doesn't fit side by side in review. *Source:* [PEP8] §Maximum Line Length (79 by default; a team may agree on up to 99), `pyproject.toml`.
@@ -42,7 +42,7 @@ Ruff checks, besides the default `E` and `F`: `W`, `I`, `B`, `UP`, `SIM`, `RUF`,
 
 ## 5. Types and data structures
 
-- **Type aliases with `type`** (`type EventKind = ...`), generics with the new syntax (`def load[M: BaseModel](...)`). *Source:* [PEP695].
+- **Type aliases with `type`** (`type WriterRecord = MeterRecord | StartedEvent | ClosedEvent`), generics with the new syntax (`def load[M: BaseModel](...)`). *Source:* [PEP695].
 - **Values are frozen dataclasses:** `@dataclass(frozen=True, slots=True)`. Use `NamedTuple` only where tuple behaviour is needed (unpacking, ordering). *Why:* a value that cannot change can be passed between threads and kept in a set without surprises. *Source:* [dataclasses].
 - **Configuration models are pydantic** models derived from `FrozenModel` (`extra="forbid"`, `frozen=True`). *Source:* ADR-0008.
 - **A closed set of string values is a `StrEnum` defined once** (`EventKind.DISPENSE`, `EndQuality.SIGNAL_LOST`). Never `Literal` aliases or plain string constants for a closed set, and never two copies of the same set; other packages import the one definition. *Why:* one named definition can be imported, iterated and renamed in one place, and its members are still strings for the database, the logs and the configuration files (pydantic validates them). A closed set of numbers (baud rates) stays a `Literal`. *Source:* [enum] ("members are also strings"), [Literal] (a type checker treats an enum as the union of its members, so a `StrEnum` is checked as strictly as a `Literal`), project decision (2026-10-15).

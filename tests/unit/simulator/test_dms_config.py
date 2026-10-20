@@ -33,7 +33,7 @@ def test_relative_link_dir_gives_absolute_ports(
 
 def test_meter_settings_come_from_the_layout() -> None:
     meter = MeterDevice(baudrate=19200, frame_end="\n")
-    layout = PlantLayout((SiloLayout(1, (tank(1, 4, 5),), meter),))
+    layout = PlantLayout((SiloLayout(id=1, tanks=(tank(1, 4, 5),), meter=meter),))
 
     config = acquisition_config(layout, Path("/tmp/ports"), reconnect_delay_s=1.0)
 
@@ -62,8 +62,10 @@ def test_board_and_tanks_follow_the_layout() -> None:
 
 
 def test_tank_name_comes_from_the_layout() -> None:
-    wiring = TankWiring(1, tank(1, 4, 5).dispense, tank(1, 4, 5).refill, name="Piasek")
-    layout = PlantLayout((SiloLayout(1, (wiring,)),))
+    wiring = TankWiring(
+        id=1, dispense=tank(1, 4, 5).dispense, refill=tank(1, 4, 5).refill, name="Piasek"
+    )
+    layout = PlantLayout((SiloLayout(id=1, tanks=(wiring,)),))
 
     assert acquisition_config(layout, Path("/tmp/ports")).tanks[0].name == "Piasek"
 

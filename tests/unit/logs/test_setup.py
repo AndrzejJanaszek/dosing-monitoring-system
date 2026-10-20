@@ -5,7 +5,7 @@ import logging
 import pytest
 import structlog
 
-from dms.logs.setup import LogFormat, configure_logging
+from dms.logs.setup import LogFormat, LogLevel, configure_logging
 
 
 class TerminalStream(io.StringIO):
@@ -13,10 +13,10 @@ class TerminalStream(io.StringIO):
         return True
 
 
-@pytest.mark.parametrize("log_format", ["json", "auto"])
+@pytest.mark.parametrize("log_format", [LogFormat.JSON, LogFormat.AUTO])
 def test_json_line_has_event_level_timestamp_and_bound_fields(log_format: LogFormat) -> None:
     stream = io.StringIO()
-    configure_logging("INFO", log_format, stream)
+    configure_logging(LogLevel.INFO, log_format, stream)
 
     structlog.get_logger().bind(meter_id="m1").info("port.opened", port="/dev/ttyUSB0")
 
@@ -30,7 +30,7 @@ def test_json_line_has_event_level_timestamp_and_bound_fields(log_format: LogFor
 
 def test_standard_library_logs_pass_through_the_same_renderer() -> None:
     stream = io.StringIO()
-    configure_logging("INFO", "json", stream)
+    configure_logging(LogLevel.INFO, LogFormat.JSON, stream)
 
     logging.getLogger("psycopg").warning("pool is slow")
 
@@ -42,7 +42,7 @@ def test_standard_library_logs_pass_through_the_same_renderer() -> None:
 
 def test_level_filters_lower_severity() -> None:
     stream = io.StringIO()
-    configure_logging("WARNING", "json", stream)
+    configure_logging(LogLevel.WARNING, LogFormat.JSON, stream)
 
     structlog.get_logger().info("service.started")
     structlog.get_logger().warning("port.silence")
@@ -53,7 +53,7 @@ def test_level_filters_lower_severity() -> None:
 
 def test_exception_is_rendered_into_json() -> None:
     stream = io.StringIO()
-    configure_logging("INFO", "json", stream)
+    configure_logging(LogLevel.INFO, LogFormat.JSON, stream)
 
     try:
         raise RuntimeError("boom")
@@ -65,7 +65,7 @@ def test_exception_is_rendered_into_json() -> None:
 
 def test_console_format_is_human_readable() -> None:
     stream = io.StringIO()
-    configure_logging("INFO", "console", stream)
+    configure_logging(LogLevel.INFO, LogFormat.CONSOLE, stream)
 
     structlog.get_logger().info("port.opened", meter_id="m1")
 
@@ -78,7 +78,7 @@ def test_console_format_is_human_readable() -> None:
 
 def test_auto_format_uses_console_on_terminal() -> None:
     stream = TerminalStream()
-    configure_logging("INFO", "auto", stream)
+    configure_logging(LogLevel.INFO, LogFormat.AUTO, stream)
 
     structlog.get_logger().info("port.opened")
 
@@ -88,8 +88,8 @@ def test_auto_format_uses_console_on_terminal() -> None:
 
 def test_reconfiguring_does_not_duplicate_output() -> None:
     stream = io.StringIO()
-    configure_logging("INFO", "json", stream)
-    configure_logging("INFO", "json", stream)
+    configure_logging(LogLevel.INFO, LogFormat.JSON, stream)
+    configure_logging(LogLevel.INFO, LogFormat.JSON, stream)
 
     structlog.get_logger().info("service.started")
 

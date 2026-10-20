@@ -1,16 +1,22 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, get_args
+from enum import StrEnum
 
-type BoardLogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+from dms.config.models import PIN_LEVELS
 
-BOARD_LOG_LEVELS: tuple[BoardLogLevel, ...] = get_args(BoardLogLevel.__value__)
 LOG_PREFIX_OPEN = "["
 LOG_PREFIX_CLOSE = "]"
 LOG_MESSAGE_SEPARATORS = ": "
 PINS_KEY = "pins"
 TEMPERATURES_KEY = "temps"
+
+
+class BoardLogLevel(StrEnum):
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +60,7 @@ def _parse_json_line(line: str) -> PinLevels | TemperaturesFrame | None:
 
 
 def _parse_log_line(line: str) -> BoardLogLine | None:
-    for level in BOARD_LOG_LEVELS:
+    for level in BoardLogLevel:
         prefix = f"{LOG_PREFIX_OPEN}{level}{LOG_PREFIX_CLOSE}"
         if line.startswith(prefix):
             return BoardLogLine(level, line.removeprefix(prefix).lstrip(LOG_MESSAGE_SEPARATORS))
@@ -68,7 +74,7 @@ def _parse_pin_levels(raw_levels: object) -> PinLevels | None:
     for key, value in raw_levels.items():
         if not (key.isascii() and key.isdecimal()):
             return None
-        if not isinstance(value, int) or isinstance(value, bool) or value not in (0, 1):
+        if not isinstance(value, int) or isinstance(value, bool) or value not in PIN_LEVELS:
             return None
         levels[int(key)] = value
     return PinLevels(levels)
