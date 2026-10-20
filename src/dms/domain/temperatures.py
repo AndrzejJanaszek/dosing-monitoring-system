@@ -42,6 +42,7 @@ class SensorStaleEnded:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UnknownSensorSeen:
     address: str
+    error_code: str | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -171,7 +172,7 @@ class TemperatureSensors:
         if source is None:
             source = _Source(started_mono_ns=result.mono_ns)
             self._unknown[address] = source
-            notices.append(UnknownSensorSeen(address=address))
+            notices.append(UnknownSensorSeen(address=address, error_code=result.error_code))
         source.last = result
         return notices
 

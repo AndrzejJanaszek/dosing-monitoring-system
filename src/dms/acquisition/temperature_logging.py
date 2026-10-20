@@ -37,6 +37,9 @@ def log_temperature_notice(notice: TemperatureNotice) -> None:
                 duration_s=notice.duration_ns / NS_PER_S,
             )
         case UnknownSensorSeen():
-            logger.warning(events.TEMPERATURE_UNKNOWN_SENSOR, address=notice.address)
+            fields = {"address": notice.address}
+            if notice.error_code is not None:
+                fields["error_code"] = notice.error_code
+            logger.warning(events.TEMPERATURE_UNKNOWN_SENSOR, **fields)
         case UnknownSensorGone():
             logger.info(events.TEMPERATURE_UNKNOWN_SENSOR_GONE, address=notice.address)

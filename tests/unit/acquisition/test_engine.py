@@ -440,3 +440,25 @@ def test_error_without_a_raw_code_logs_no_error_code_field() -> None:
     (logged,) = logs
     assert logged["error"] == TemperatureError.POWER_RESET
     assert "error_code" not in logged
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_fields"),
+    [
+        pytest.param("crc_error", {"address": OTHER_ADDRESS, "error_code": "crc_error"}, id="raw"),
+        pytest.param("read_failed", {"address": OTHER_ADDRESS}, id="known-code"),
+    ],
+)
+def test_unknown_address_log_carries_the_raw_code_only_for_unrecognized_codes(
+    code: str, expected_fields: dict[str, str]
+) -> None:
+    engine, in_queue, _ = build_with_temperatures()
+    in_queue.put(temperature_readings(1.0, (OTHER_ADDRESS, None, code)))
+
+    with capture_logs() as logs:
+        engine.step()
+
+    (logged,) = logs
+    assert logged["event"] == events.TEMPERATURE_UNKNOWN_SENSOR
+    assert {key: logged[key] for key in expected_fields} == expected_fields
+    assert ("error_code" in logged) == ("error_code" in expected_fields)

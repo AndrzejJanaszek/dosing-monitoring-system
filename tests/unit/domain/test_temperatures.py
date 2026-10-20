@@ -249,7 +249,7 @@ def test_unknown_address_is_reported_once_and_recorded_under_its_address() -> No
     first = sensors.on_readings(temperature_readings(0.5, (OTHER_ADDRESS, 19.5, None)))
     second = sensors.on_readings(temperature_readings(1.5, (OTHER_ADDRESS, 19.75, None)))
 
-    assert first == [UnknownSensorSeen(address=OTHER_ADDRESS)]
+    assert first == [UnknownSensorSeen(address=OTHER_ADDRESS, error_code=None)]
     assert second == []
     assert sensors.on_tick(tick(2.0)) == [
         UnknownSensorRecord(
@@ -266,7 +266,7 @@ def test_unknown_address_error_is_recorded_without_an_error_notice() -> None:
 
     notices = sensors.on_readings(temperature_readings(0.5, (OTHER_ADDRESS, None, "read_failed")))
 
-    assert notices == [UnknownSensorSeen(address=OTHER_ADDRESS)]
+    assert notices == [UnknownSensorSeen(address=OTHER_ADDRESS, error_code=None)]
     assert sensors.on_tick(tick(1.0)) == [
         UnknownSensorRecord(
             address=OTHER_ADDRESS,
@@ -297,7 +297,7 @@ def test_unknown_address_returning_after_it_was_forgotten_is_reported_again() ->
 
     notices = sensors.on_readings(temperature_readings(9.0, (OTHER_ADDRESS, 19.5, None)))
 
-    assert notices == [UnknownSensorSeen(address=OTHER_ADDRESS)]
+    assert notices == [UnknownSensorSeen(address=OTHER_ADDRESS, error_code=None)]
 
 
 def test_known_and_unknown_addresses_in_one_frame_are_handled_independently() -> None:
@@ -345,3 +345,11 @@ def test_reported_unrecognized_codes_are_forgotten_when_the_error_ends() -> None
     notices = feed(sensors, 3.0, None, "crc_error")
 
     assert [type(notice) for notice in notices] == [SensorErrorStarted]
+
+
+def test_unknown_address_first_seen_with_an_unrecognized_code_reports_the_raw_code() -> None:
+    sensors = build_temperature_sensors()
+
+    notices = sensors.on_readings(temperature_readings(0.5, (OTHER_ADDRESS, None, "crc_error")))
+
+    assert notices == [UnknownSensorSeen(address=OTHER_ADDRESS, error_code="crc_error")]
