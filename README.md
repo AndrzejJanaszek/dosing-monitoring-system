@@ -151,7 +151,7 @@ PGPASSWORD=dms DMS_CONFIG_DIR=config/example uv run dms-migrate
 
 ## Running acquisition locally
 
-The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port, logs every change of a tank signal (`signal.changed`) and stores each dispense and refill of a tank in `dms.tank_event` (see [Tank events](#tank-events)). Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
+The acquisition service reads a meter on a serial port and stores one reading per second per silo in `dms.meter_reading`. It also reads the Arduino signal module on a second port, logs every change of a tank signal (`signal.changed`) stores each dispense and refill of a tank in `dms.tank_event` (see [Tank events](#tank-events)) and stores the temperatures of the board's sensors (see [Temperatures](#temperatures)). Without hardware, `dms-simulator` plays a named scenario on pseudo-terminals: one for the Dini Argeo DGTP meter of each silo and one for the Arduino signal module.
 
 ```bash
 scripts/db-reset.sh
@@ -216,6 +216,21 @@ On `SIGTERM` the engine handles the queued messages and then closes every open e
 A record the database rejects (a constraint violation or a value out of range) does not stop the writer: the rest of the batch is written, and the record is logged in full as `db.record_rejected` (`CRITICAL`) and dropped. Other database errors still stop the service.
 
 The simulator package can compute the events a scenario should produce from its samples (`dms.simulator.expected_events`); `tests/integration/test_event_scenarios.py` runs the whole catalog through the handlers and the engine and compares the result.
+
+### Temperatures
+
+The board sends a frame `{"temps":[...]}` with one entry per sensor: `{"a":"<address>","t":<value>}` for a reading or `{"a":"<address>","t":null,"e":"<code>"}` for a sensor error. The codes the DMS knows are `read_failed`, `power_reset` and `insufficient_power`; the DMS does not interpret the special values of the DS18B20 itself (`-127`, `85`), the board has to report them as codes. A frame with a malformed entry (bad address, a repeated address, a non-numeric or non-finite value, a value above 999.99 in magnitude, `t: null` without a code, a code with a value, an unknown key) is dropped whole and counted as garbage.
+
+Once per tick (`[engine] tick_interval_s`), and at most every `record_interval_s`, the newest reading of each sensor that is not older than `max_reading_age_s` is stored once, with the time of its receipt; a silence is a gap, not a row. A sensor listed in `[[temperature_sensors]]` goes to `dms.temperature_reading`, an address missing from the configuration goes to `dms.unknown_sensor_reading` (no catalogue row, the address is the key). A row carries either `value_c` or an `error`:
+
+| `error` | set by | `value_c` |
+|---|---|---|
+| empty | | the reading |
+| `read_failed`, `power_reset`, `insufficient_power` | the board | empty |
+| `out_of_range` | the DMS, when the value is outside `min_valid_c`..`max_valid_c` (defaults -40 and 80 °C) | the raw value |
+| `unrecognized` | the DMS, for a code it does not know (the raw code is in the `temperature.sensor_error` log) | empty |
+
+The settings are in the `[temperatures]` section of `acquisition.toml` (`record_interval_s` 1 s, `max_reading_age_s` 5 s, `min_valid_c`, `max_valid_c`). State changes (sensor error and its end, a sensor that stopped arriving and its return, an unknown address and its disappearance) are logged once as `temperature.*` events.
 
 ### Simulator scenarios
 
