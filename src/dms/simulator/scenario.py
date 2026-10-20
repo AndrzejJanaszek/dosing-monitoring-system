@@ -112,6 +112,9 @@ def _duration_errors(scenario: Scenario) -> list[str]:
 
 
 def _sensor_fault_errors(scenario: Scenario) -> list[str]:
+    if not scenario.events and scenario.duration_s is None:
+        return []
+
     return [
         f"board.sensors[{sensor_index}].faults[{fault_index}]: ends after the scenario"
         f" ({scenario.duration_ns / NS_PER_S:g} s)"

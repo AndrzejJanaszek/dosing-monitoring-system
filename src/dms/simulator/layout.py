@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from dms.config.models import (
     MAX_SMALLINT,
     MAX_TANKS_PER_SILO,
+    MAX_TEMPERATURE_ABS_C,
     MIN_LEG,
     PIN_LEVELS,
     SENSOR_ADDRESS_PATTERN,
@@ -302,6 +303,14 @@ def _fault_errors(path: str, faults: tuple[SensorFault, ...]) -> list[str]:
             errors.append(f"{path}.faults[{index}]: end must be after a non-negative start")
         if isinstance(fault.kind, ErrorCode) and not fault.kind.code:
             errors.append(f"{path}.faults[{index}].kind: error code is empty")
+        if (
+            isinstance(fault.kind, FixedValue)
+            and not abs(fault.kind.value_c) <= MAX_TEMPERATURE_ABS_C
+        ):
+            errors.append(
+                f"{path}.faults[{index}].kind: {fault.kind.value_c:g} is outside"
+                f" ±{MAX_TEMPERATURE_ABS_C:g} °C"
+            )
 
     for (_, earlier), (later_index, later) in itertools.combinations(
         sorted(enumerate(faults), key=lambda item: item[1].start_s), 2

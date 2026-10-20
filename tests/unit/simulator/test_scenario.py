@@ -46,7 +46,7 @@ def test_scenario_without_events_needs_explicit_duration() -> None:
     assert scenario_with(duration_s=30).duration_ns == 30 * NS_PER_S
 
 
-def idle_with_fault(end_s: float) -> Scenario:
+def idle_with_fault(end_s: float, duration_s: float | None = 30) -> Scenario:
     sensor = TemperatureSensor(
         id=1,
         address="28A8F126AB240B1C",
@@ -54,7 +54,7 @@ def idle_with_fault(end_s: float) -> Scenario:
         faults=(SensorFault(start_s=1.0, end_s=end_s, kind=Missing()),),
     )
     layout = PlantLayout(two_tank_layout().silos, SignalBoard(sensors=(sensor,)))
-    return scenario_with(layout=layout, duration_s=30)
+    return scenario_with(layout=layout, duration_s=duration_s)
 
 
 def test_sensor_fault_may_last_until_the_end_of_the_scenario() -> None:
@@ -62,6 +62,10 @@ def test_sensor_fault_may_last_until_the_end_of_the_scenario() -> None:
 
 
 INVALID_SCENARIOS: dict[str, tuple[Callable[[], object], str]] = {
+    "sensor-fault-without-duration": (
+        lambda: idle_with_fault(5.0, duration_s=None),
+        "duration_s: required when there are no events",
+    ),
     "duplicate-silo-id": (
         lambda: scenario_with(
             layout=PlantLayout(

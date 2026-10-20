@@ -177,6 +177,10 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
         lambda: sensor_with_faults(SensorFault(start_s=1.0, end_s=5.0, kind=ErrorCode(""))),
         "board.sensors[0].faults[0].kind: error code is empty",
     ),
+    "fault-with-fixed-value-out-of-protocol-range": (
+        lambda: sensor_with_faults(SensorFault(start_s=1.0, end_s=5.0, kind=FixedValue(1000.0))),
+        "board.sensors[0].faults[0].kind: 1000 is outside",
+    ),
     "overlapping-faults": (
         lambda: sensor_with_faults(
             SensorFault(start_s=1.0, end_s=5.0, kind=Missing()),
