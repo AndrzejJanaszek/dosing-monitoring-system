@@ -67,7 +67,7 @@ def relation_of(scenario: Scenario) -> tuple[str, ...]:
 
 
 def test_catalog_has_expected_size() -> None:
-    assert len(SCENARIOS) == 34
+    assert len(SCENARIOS) == 40
 
 
 @pytest.mark.parametrize("name", EXPECTED_RELATIONS)
@@ -105,6 +105,35 @@ def test_special_layouts_are_used() -> None:
     assert SCENARIOS["dispense-single-active-high"].layout is ONE_TANK_ACTIVE_HIGH
     assert SCENARIOS["dispense-single-with-sensors"].layout is ONE_TANK_WITH_SENSORS
     assert len(ONE_TANK_WITH_SENSORS.board.sensors) == 2
+
+
+TEMPERATURE_SCENARIOS = [name for name in SCENARIOS if name.startswith("temperatures-")]
+
+
+def test_temperature_scenarios_are_in_the_catalogue() -> None:
+    assert TEMPERATURE_SCENARIOS == [
+        "temperatures-rising",
+        "temperatures-ambient-sensor",
+        "temperatures-sensor-errors",
+        "temperatures-out-of-range",
+        "temperatures-sensor-missing-and-back",
+        "temperatures-unknown-sensor",
+    ]
+
+
+def test_ambient_scenario_has_a_sensor_without_a_silo() -> None:
+    sensors = SCENARIOS["temperatures-ambient-sensor"].layout.board.sensors
+
+    assert [(sensor.silo_id, sensor.leg) for sensor in sensors] == [(1, 1), (None, None)]
+
+
+def test_unknown_sensor_scenario_has_a_sensor_outside_the_configuration() -> None:
+    scenario = SCENARIOS["temperatures-unknown-sensor"]
+
+    config = acquisition_config(scenario.layout, Path("/tmp/dms"))
+
+    assert [sensor.id for sensor in scenario.layout.board.sensors] == [1, 2]
+    assert [sensor.id for sensor in config.temperature_sensors] == [1]
 
 
 def test_duplicate_scenario_names_are_rejected() -> None:

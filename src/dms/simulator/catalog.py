@@ -3,8 +3,12 @@ from dataclasses import dataclass
 
 from dms.simulator.layout import (
     DEFAULT_ACTIVE_LEVEL,
+    ErrorCode,
+    FixedValue,
     Input,
+    Missing,
     PlantLayout,
+    SensorFault,
     SignalBoard,
     SiloLayout,
     TankWiring,
@@ -23,6 +27,12 @@ SHORT_DISPENSE_START_S = 3.0
 SHORT_DISPENSE_END_S = 6.0
 SHORT_DISPENSE_MASS_KG = 600
 ACTIVE_HIGH_LEVEL = 1
+TEMPERATURE_DURATION_S = 30.0
+FIRST_SENSOR_ADDRESS = "28A8F126AB240B1C"
+SECOND_SENSOR_ADDRESS = "28FF4A7C61160398"
+OUTSIDE_SENSOR_ADDRESS = "28B3C41D5E6F7A80"
+RISING_RATE_C_PER_MIN = 6.0
+SLOW_RATE_C_PER_MIN = 3.0
 
 
 def _tank(
@@ -173,6 +183,115 @@ def _polarity_and_sensors() -> list[Scenario]:
     ]
 
 
+def _sensor_layout(*sensors: TemperatureSensor) -> PlantLayout:
+    return PlantLayout(ONE_TANK.silos, SignalBoard(sensors=sensors))
+
+
+def _fault(start_s: float, end_s: float, kind: ErrorCode | FixedValue | Missing) -> SensorFault:
+    return SensorFault(start_s=start_s, end_s=end_s, kind=kind)
+
+
+def _temperatures() -> list[Scenario]:
+    rising = _sensor_layout(
+        TemperatureSensor(
+            id=1,
+            address=FIRST_SENSOR_ADDRESS,
+            start_c=20.0,
+            rate_c_per_min=RISING_RATE_C_PER_MIN,
+            silo_id=1,
+            leg=1,
+        ),
+        TemperatureSensor(
+            id=2,
+            address=SECOND_SENSOR_ADDRESS,
+            start_c=20.5,
+            rate_c_per_min=SLOW_RATE_C_PER_MIN,
+            silo_id=1,
+            leg=2,
+        ),
+    )
+    ambient = _sensor_layout(
+        TemperatureSensor(id=1, address=FIRST_SENSOR_ADDRESS, start_c=21.5, silo_id=1, leg=1),
+        TemperatureSensor(
+            id=2,
+            address=SECOND_SENSOR_ADDRESS,
+            start_c=12.0,
+            rate_c_per_min=RISING_RATE_C_PER_MIN / 5,
+            name="Otoczenie",
+        ),
+    )
+    errors = _sensor_layout(
+        TemperatureSensor(
+            id=1,
+            address=FIRST_SENSOR_ADDRESS,
+            start_c=20.0,
+            rate_c_per_min=RISING_RATE_C_PER_MIN,
+            silo_id=1,
+            leg=1,
+            faults=(
+                _fault(6, 8, ErrorCode("read_failed")),
+                _fault(12, 14, ErrorCode("power_reset")),
+                _fault(18, 20, ErrorCode("insufficient_power")),
+                _fault(24, 26, ErrorCode("crc_error")),
+            ),
+        )
+    )
+    out_of_range = _sensor_layout(
+        TemperatureSensor(
+            id=1,
+            address=FIRST_SENSOR_ADDRESS,
+            start_c=20.0,
+            rate_c_per_min=RISING_RATE_C_PER_MIN,
+            silo_id=1,
+            leg=1,
+            faults=(
+                _fault(6, 8, FixedValue(-127.0)),
+                _fault(12, 14, FixedValue(85.0)),
+                _fault(18, 20, FixedValue(150.25)),
+            ),
+        )
+    )
+    missing = _sensor_layout(
+        TemperatureSensor(
+            id=1,
+            address=FIRST_SENSOR_ADDRESS,
+            start_c=20.0,
+            rate_c_per_min=RISING_RATE_C_PER_MIN,
+            silo_id=1,
+            leg=1,
+            faults=(_fault(8, 18, Missing()),),
+        )
+    )
+    unknown = _sensor_layout(
+        TemperatureSensor(
+            id=1,
+            address=FIRST_SENSOR_ADDRESS,
+            start_c=20.0,
+            rate_c_per_min=RISING_RATE_C_PER_MIN,
+            silo_id=1,
+            leg=1,
+        ),
+        TemperatureSensor(
+            id=2,
+            address=OUTSIDE_SENSOR_ADDRESS,
+            start_c=18.0,
+            rate_c_per_min=SLOW_RATE_C_PER_MIN,
+            configured=False,
+            faults=(_fault(10, 20, Missing()),),
+        ),
+    )
+    return [
+        _scenario("temperatures-rising", rising, duration_s=TEMPERATURE_DURATION_S),
+        _scenario("temperatures-ambient-sensor", ambient, duration_s=TEMPERATURE_DURATION_S),
+        _scenario("temperatures-sensor-errors", errors, duration_s=TEMPERATURE_DURATION_S),
+        _scenario("temperatures-out-of-range", out_of_range, duration_s=TEMPERATURE_DURATION_S),
+        _scenario(
+            "temperatures-sensor-missing-and-back", missing, duration_s=TEMPERATURE_DURATION_S
+        ),
+        _scenario("temperatures-unknown-sensor", unknown, duration_s=TEMPERATURE_DURATION_S),
+    ]
+
+
 def build_catalog(scenarios: Sequence[Scenario]) -> dict[str, Scenario]:
     catalog: dict[str, Scenario] = {}
     for scenario in scenarios:
@@ -190,5 +309,6 @@ SCENARIOS = build_catalog(
         *_two_tank_series(),
         *_two_silos(),
         *_polarity_and_sensors(),
+        *_temperatures(),
     ]
 )
