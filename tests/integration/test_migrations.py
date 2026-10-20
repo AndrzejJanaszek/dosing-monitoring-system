@@ -42,18 +42,20 @@ def test_migration_on_empty_database_creates_tables_and_records_versions(
     with owner_connection(fresh_database) as connection:
         applied = apply_migrations(connection, load_migrations())
 
-        assert [migration.version for migration in applied] == [1, 2, 3, 4, 5]
+        assert [migration.version for migration in applied] == [1, 2, 3, 4, 5, 6]
         assert table_names(connection) == {
             "schema_migration",
             "silo",
             "tank",
             "tank_event",
             "temperature_sensor",
+            "temperature_reading",
+            "unknown_sensor_reading",
             "run",
             "meter_reading",
         }
         assert database_schema_version(connection) == package_schema_version()
-        assert str(package_schema_version()) == "1.4.0"
+        assert str(package_schema_version()) == "1.5.0"
 
 
 def test_second_run_changes_nothing(fresh_database: str) -> None:
@@ -62,7 +64,7 @@ def test_second_run_changes_nothing(fresh_database: str) -> None:
 
         assert apply_migrations(connection, load_migrations()) == []
         row = connection.execute("SELECT count(*) FROM dms.schema_migration").fetchone()
-        assert row == (5,)
+        assert row == (6,)
 
 
 def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str) -> None:
@@ -80,6 +82,7 @@ def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str)
             "0003_tank_event.sql",
             "0004_event_recovery.sql",
             "0005_temperature_sensor.sql",
+            "0006_temperature_reading.sql",
         ]
         assert "meter_reading" not in table_names(connection)
 
@@ -88,13 +91,13 @@ def test_database_ahead_of_package_is_refused(fresh_database: str) -> None:
     with owner_connection(fresh_database) as connection:
         apply_migrations(connection, load_migrations())
         connection.execute(
-            "INSERT INTO dms.schema_migration VALUES (6, 'future', 'x', '1.5.0', now())"
+            "INSERT INTO dms.schema_migration VALUES (7, 'future', 'x', '1.6.0', now())"
         )
 
         with pytest.raises(DatabaseAheadError) as raised:
             apply_migrations(connection, load_migrations())
 
-        assert raised.value.migrations == ["0006_future"]
+        assert raised.value.migrations == ["0007_future"]
 
 
 def test_failing_migration_leaves_no_trace(fresh_database: str, tmp_path: Path) -> None:
@@ -186,6 +189,8 @@ def test_writer_role_inserts_meter_reading(
         "DELETE FROM dms.silo",
         "DELETE FROM dms.meter_reading",
         "DELETE FROM dms.tank_event",
+        "DELETE FROM dms.temperature_reading",
+        "UPDATE dms.unknown_sensor_reading SET value_c = 0",
         "UPDATE dms.meter_reading SET value_kg = 0",
         "CREATE TABLE dms.probe (id integer)",
         "DROP TABLE dms.silo",
@@ -210,6 +215,8 @@ def test_writer_role_is_refused_forbidden_statements(
         "meter_reading",
         "tank_event",
         "temperature_sensor",
+        "temperature_reading",
+        "unknown_sensor_reading",
         "schema_migration",
     ],
 )
@@ -248,6 +255,34 @@ def test_temperature_sensor_leg_is_checked(
 
     with pytest.raises(errors.CheckViolation):
         migrated_connection.execute(statement)
+
+
+@pytest.mark.parametrize("role", ["dms_api", "dms_read"])
+@pytest.mark.parametrize("table", ["temperature_reading", "unknown_sensor_reading"])
+def test_read_roles_cannot_insert_temperature_readings(
+    migrated_connection: psycopg.Connection[TupleRow], role: str, table: str
+) -> None:
+    set_role(migrated_connection, role)
+
+    with pytest.raises(errors.InsufficientPrivilege):
+        migrated_connection.execute(f"INSERT INTO dms.{table} VALUES (1, now(), 1, NULL)")
+
+
+def test_writer_role_inserts_temperature_readings(
+    migrated_connection: psycopg.Connection[TupleRow],
+) -> None:
+    migrated_connection.execute(
+        "INSERT INTO dms.temperature_sensor VALUES (1, NULL, NULL, 'x', true)"
+    )
+    set_role(migrated_connection, "dms_writer")
+
+    migrated_connection.execute(
+        "INSERT INTO dms.temperature_reading VALUES (1, now(), 21.5, NULL)"
+    )
+    migrated_connection.execute(
+        "INSERT INTO dms.unknown_sensor_reading"
+        " VALUES ('28A8F126AB240B1C', now(), NULL, 'read_failed')"
+    )
 
 
 def test_command_applies_migrations_with_owner_role(

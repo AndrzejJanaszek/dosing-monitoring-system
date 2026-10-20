@@ -24,9 +24,23 @@ class SignalStates:
 
 
 @dataclass(frozen=True, slots=True)
+class TemperatureEntry:
+    address: str
+    value_c: float | None
+    error_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TemperatureReadings:
+    entries: tuple[TemperatureEntry, ...]
+    wall_ns: int
+    mono_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class Tick:
     wall_ns: int
     mono_ns: int
 
 
-type EngineMessage = MeterReading | SignalStates | Tick
+type EngineMessage = MeterReading | SignalStates | TemperatureReadings | Tick

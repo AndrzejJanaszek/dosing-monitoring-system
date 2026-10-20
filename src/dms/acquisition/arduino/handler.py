@@ -13,7 +13,7 @@ from dms.acquisition.arduino.frames import (
 from dms.acquisition.arduino.mapping import SignalMapper
 from dms.acquisition.serial.adapter import FrameOutcome
 from dms.logs import events
-from dms.messages import EngineMessage, SignalStates
+from dms.messages import EngineMessage, SignalStates, TemperatureEntry, TemperatureReadings
 
 LOG_LEVELS: dict[BoardLogLevel, int] = {
     BoardLogLevel.DEBUG: logging.DEBUG,
@@ -47,11 +47,21 @@ class ArduinoFrameHandler:
             self._log_board_line(parsed)
             return FrameOutcome.IGNORED
         if isinstance(parsed, TemperaturesFrame):
-            return FrameOutcome.ACCEPTED
+            return self._handle_temperatures(parsed, wall_ns, mono_ns)
         return self._handle_pins(parsed, wall_ns, mono_ns)
 
     def _log_board_line(self, line: BoardLogLine) -> None:
         self._logger.log(LOG_LEVELS[line.level], events.ARDUINO_LOG, message=line.message)
+
+    def _handle_temperatures(
+        self, parsed: TemperaturesFrame, wall_ns: int, mono_ns: int
+    ) -> FrameOutcome:
+        entries = tuple(
+            TemperatureEntry(entry.address, entry.value_c, entry.error_code)
+            for entry in parsed.entries
+        )
+        self._out_queue.put(TemperatureReadings(entries, wall_ns, mono_ns))
+        return FrameOutcome.ACCEPTED
 
     def _handle_pins(self, parsed: PinLevels, wall_ns: int, mono_ns: int) -> FrameOutcome:
         missing = self._mapper.missing_pins(parsed.levels)

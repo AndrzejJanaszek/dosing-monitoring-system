@@ -25,6 +25,11 @@ MIN_PIN_LEVEL = 0
 MAX_PIN_LEVEL = 1
 PIN_LEVELS = (MIN_PIN_LEVEL, MAX_PIN_LEVEL)
 MIN_LEG = 1
+MAX_TEMPERATURE_ABS_C = 999.99
+DEFAULT_TEMPERATURE_RECORD_INTERVAL_S = 1.0
+DEFAULT_TEMPERATURE_MAX_READING_AGE_S = 5.0
+DEFAULT_MIN_VALID_TEMPERATURE_C = -40.0
+DEFAULT_MAX_VALID_TEMPERATURE_C = 80.0
 SENSOR_ADDRESS_PATTERN = re.compile(r"^[0-9A-F]{16}$")
 
 type BaudRate = Literal[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
@@ -106,6 +111,21 @@ class TemperatureSensorConfig(FrozenModel):
     leg: int | None = Field(default=None, ge=MIN_LEG, le=MAX_SMALLINT)
 
 
+class TemperaturesConfig(FrozenModel):
+    record_interval_s: float = Field(default=DEFAULT_TEMPERATURE_RECORD_INTERVAL_S, gt=0)
+    max_reading_age_s: float = Field(default=DEFAULT_TEMPERATURE_MAX_READING_AGE_S, gt=0)
+    min_valid_c: float = Field(
+        default=DEFAULT_MIN_VALID_TEMPERATURE_C,
+        ge=-MAX_TEMPERATURE_ABS_C,
+        le=MAX_TEMPERATURE_ABS_C,
+    )
+    max_valid_c: float = Field(
+        default=DEFAULT_MAX_VALID_TEMPERATURE_C,
+        ge=-MAX_TEMPERATURE_ABS_C,
+        le=MAX_TEMPERATURE_ABS_C,
+    )
+
+
 class AcquisitionConfig(FrozenModel):
     engine: EngineConfig = EngineConfig()
     meters: tuple[MeterConfig, ...]
@@ -113,6 +133,7 @@ class AcquisitionConfig(FrozenModel):
     board: BoardConfig | None = None
     tanks: tuple[TankConfig, ...] = ()
     temperature_sensors: tuple[TemperatureSensorConfig, ...] = ()
+    temperatures: TemperaturesConfig = TemperaturesConfig()
 
 
 def validate_acquisition_rules(config: AcquisitionConfig) -> list[str]:
@@ -198,6 +219,9 @@ def _temperature_sensor_errors(config: AcquisitionConfig) -> list[str]:
     )
     if config.temperature_sensors and config.board is None:
         errors.append("temperature_sensors: temperature sensors require a [board] section")
+
+    if config.temperatures.min_valid_c >= config.temperatures.max_valid_c:
+        errors.append("temperatures.min_valid_c: must be below max_valid_c")
 
     silo_ids = {silo.id for silo in config.silos}
     for index, sensor in enumerate(config.temperature_sensors):

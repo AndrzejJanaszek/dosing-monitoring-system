@@ -9,13 +9,23 @@ from psycopg import errors
 from psycopg.rows import TupleRow
 
 from dms.domain.events import ClosedEvent, StartedEvent
-from dms.domain.records import MeterRecord, WriterRecord
+from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
 from dms.units import NS_PER_MS, NS_PER_US
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 INSERT_METER_READING_SQL = (
     "INSERT INTO dms.meter_reading (silo_id, t, value_kg) VALUES (%s, %s, %s)"
+    " ON CONFLICT DO NOTHING"
+)
+
+INSERT_TEMPERATURE_READING_SQL = (
+    "INSERT INTO dms.temperature_reading (sensor_id, t, value_c, error) VALUES (%s, %s, %s, %s)"
+    " ON CONFLICT DO NOTHING"
+)
+
+INSERT_UNKNOWN_SENSOR_READING_SQL = (
+    "INSERT INTO dms.unknown_sensor_reading (address, t, value_c, error) VALUES (%s, %s, %s, %s)"
     " ON CONFLICT DO NOTHING"
 )
 
@@ -62,8 +72,8 @@ class DataStoreError(Exception):
 
 
 class WriteResult(NamedTuple):
-    meter_inserted: int
-    meter_total: int
+    readings_inserted: int
+    readings_total: int
 
 
 class RecordStore(Protocol):
@@ -123,6 +133,16 @@ class PostgresRecordStore:
             for record in records
             if isinstance(record, MeterRecord)
         ]
+        temperature_rows = [
+            (record.sensor_id, timestamp_from_ns(record.wall_ns), record.value_c, record.error)
+            for record in records
+            if isinstance(record, TemperatureRecord)
+        ]
+        unknown_sensor_rows = [
+            (record.address, timestamp_from_ns(record.wall_ns), record.value_c, record.error)
+            for record in records
+            if isinstance(record, UnknownSensorRecord)
+        ]
         start_rows = [
             self._start_row(record) for record in records if isinstance(record, StartedEvent)
         ]
@@ -132,10 +152,19 @@ class PostgresRecordStore:
             self._connection.transaction(),
             self._connection.cursor() as cursor,
         ):
-            meter_inserted = self._execute_group(cursor, INSERT_METER_READING_SQL, meter_rows)
+            readings_inserted = self._execute_group(cursor, INSERT_METER_READING_SQL, meter_rows)
+            readings_inserted += self._execute_group(
+                cursor, INSERT_TEMPERATURE_READING_SQL, temperature_rows
+            )
+            readings_inserted += self._execute_group(
+                cursor, INSERT_UNKNOWN_SENSOR_READING_SQL, unknown_sensor_rows
+            )
             self._execute_group(cursor, INSERT_EVENT_START_SQL, start_rows)
             self._execute_group(cursor, UPSERT_EVENT_END_SQL, end_rows)
-        return WriteResult(meter_inserted, len(meter_rows))
+        return WriteResult(
+            readings_inserted,
+            len(meter_rows) + len(temperature_rows) + len(unknown_sensor_rows),
+        )
 
     def close_rejected_event(self, event: ClosedEvent) -> bool:
         with (

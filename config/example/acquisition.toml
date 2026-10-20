@@ -3,6 +3,12 @@ tick_interval_s = 1.0
 max_reading_age_s = 1.0
 max_signal_age_s = 1.0
 
+[temperatures]
+record_interval_s = 1.0
+max_reading_age_s = 5.0
+min_valid_c = -40.0
+max_valid_c = 80.0
+
 [[meters]]
 id = "meter-1"
 port = "/tmp/dms/meter-1"

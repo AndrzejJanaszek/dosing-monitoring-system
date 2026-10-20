@@ -6,11 +6,26 @@ from structlog.testing import capture_logs
 
 from dms.acquisition.engine import Engine
 from dms.domain.events import ClosedEvent, StartedEvent
-from dms.domain.records import MeterRecord, WriterRecord
+from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.temperature_error import TemperatureError
 from dms.logs import events
-from dms.messages import EngineMessage, MeterReading, SignalStates, TankSignals, Tick
+from dms.messages import (
+    EngineMessage,
+    MeterReading,
+    SignalStates,
+    TankSignals,
+    Tick,
+)
 from dms.units import NS_PER_S
-from tests.unit.domain.builders import build_silo
+from tests.unit.domain.builders import (
+    OTHER_ADDRESS,
+    SENSOR_ADDRESS,
+    SENSOR_ID,
+    WALL_OFFSET_NS,
+    build_silo,
+    build_temperature_sensors,
+    temperature_readings,
+)
 
 
 def build() -> tuple[Engine, queue.Queue[EngineMessage], queue.Queue[WriterRecord]]:
@@ -329,3 +344,121 @@ def test_crash_of_the_engine_closes_no_open_events(monkeypatch: pytest.MonkeyPat
 
     assert len(handled) == 3
     assert [item for item in records(out_queue) if isinstance(item, ClosedEvent)] == []
+
+
+def build_with_temperatures() -> tuple[
+    Engine, queue.Queue[EngineMessage], queue.Queue[WriterRecord]
+]:
+    in_queue: queue.Queue[EngineMessage] = queue.Queue()
+    out_queue: queue.Queue[WriterRecord] = queue.Queue()
+    engine = Engine(
+        in_queue=in_queue,
+        out_queue=out_queue,
+        silos_by_meter={"m1": build_silo(1)},
+        stop_event=threading.Event(),
+        temperatures=build_temperature_sensors(),
+    )
+    return engine, in_queue, out_queue
+
+
+def test_temperature_readings_become_records_on_the_next_tick() -> None:
+    engine, in_queue, out_queue = build_with_temperatures()
+    in_queue.put(
+        temperature_readings(0.5, (SENSOR_ADDRESS, 21.5, None), (OTHER_ADDRESS, 19.0, None))
+    )
+    in_queue.put(Tick(0, NS_PER_S))
+
+    for _ in range(2):
+        engine.step()
+
+    assert records(out_queue) == [
+        TemperatureRecord(
+            sensor_id=SENSOR_ID, wall_ns=WALL_OFFSET_NS + 500_000_000, value_c=21.5, error=None
+        ),
+        UnknownSensorRecord(
+            address=OTHER_ADDRESS, wall_ns=WALL_OFFSET_NS + 500_000_000, value_c=19.0, error=None
+        ),
+    ]
+
+
+def test_temperature_readings_are_ignored_without_a_board() -> None:
+    engine, in_queue, out_queue = build()
+    in_queue.put(temperature_readings(0.5, (SENSOR_ADDRESS, 21.5, None)))
+    in_queue.put(Tick(0, NS_PER_S))
+
+    for _ in range(2):
+        engine.step()
+
+    assert records(out_queue) == []
+
+
+def test_temperature_state_changes_are_logged_once_each() -> None:
+    engine, in_queue, _ = build_with_temperatures()
+    for message in (
+        temperature_readings(1.0, (SENSOR_ADDRESS, None, "crc_error"), (OTHER_ADDRESS, 1.0, None)),
+        temperature_readings(
+            2.0, (SENSOR_ADDRESS, None, "read_failed"), (OTHER_ADDRESS, 1.0, None)
+        ),
+        temperature_readings(3.0, (SENSOR_ADDRESS, 20.0, None)),
+        Tick(0, 9 * NS_PER_S),
+        Tick(0, 10 * NS_PER_S),
+        temperature_readings(11.0, (SENSOR_ADDRESS, 20.0, None)),
+    ):
+        in_queue.put(message)
+
+    with capture_logs() as logs:
+        for _ in range(6):
+            engine.step()
+
+    logged = [entry for entry in logs if entry["event"].startswith("temperature.")]
+    assert [
+        (entry["event"], entry.get("sensor_id", entry.get("address"))) for entry in logged
+    ] == [
+        (events.TEMPERATURE_SENSOR_ERROR, SENSOR_ID),
+        (events.TEMPERATURE_UNKNOWN_SENSOR, OTHER_ADDRESS),
+        (events.TEMPERATURE_SENSOR_ERROR_ENDED, SENSOR_ID),
+        (events.TEMPERATURE_STALE, SENSOR_ID),
+        (events.TEMPERATURE_UNKNOWN_SENSOR_GONE, OTHER_ADDRESS),
+        (events.TEMPERATURE_STALE_ENDED, SENSOR_ID),
+    ]
+    assert logged[0]["log_level"] == "warning"
+    assert (logged[0]["error"], logged[0]["error_code"]) == (
+        TemperatureError.UNRECOGNIZED,
+        "crc_error",
+    )
+    assert logged[2]["duration_s"] == 2.0
+    assert logged[5]["duration_s"] == 3.0
+
+
+def test_error_without_a_raw_code_logs_no_error_code_field() -> None:
+    engine, in_queue, _ = build_with_temperatures()
+    in_queue.put(temperature_readings(1.0, (SENSOR_ADDRESS, None, "power_reset")))
+
+    with capture_logs() as logs:
+        engine.step()
+
+    (logged,) = logs
+    assert logged["error"] == TemperatureError.POWER_RESET
+    assert "error_code" not in logged
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_fields"),
+    [
+        pytest.param("crc_error", {"address": OTHER_ADDRESS, "error_code": "crc_error"}, id="raw"),
+        pytest.param("read_failed", {"address": OTHER_ADDRESS}, id="known-code"),
+    ],
+)
+def test_unknown_address_log_carries_the_raw_code_only_for_unrecognized_codes(
+    code: str, expected_fields: dict[str, str]
+) -> None:
+    engine, in_queue, _ = build_with_temperatures()
+    in_queue.put(temperature_readings(1.0, (OTHER_ADDRESS, None, code)))
+
+    with capture_logs() as logs:
+        engine.step()
+
+    (logged,) = logs
+    assert logged["event"] == events.TEMPERATURE_UNKNOWN_SENSOR
+    assert {key: logged[key] for key in expected_fields} == expected_fields
+    assert ("error_code" in logged) == ("error_code" in expected_fields)

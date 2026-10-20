@@ -29,6 +29,7 @@ from dms.config.models import (
 )
 from dms.domain.records import WriterRecord
 from dms.domain.silo import Silo
+from dms.domain.temperatures import TemperatureSensors
 from dms.logs import events
 from dms.messages import EngineMessage
 from dms.persistence.catalog import stop_run
@@ -149,6 +150,23 @@ def build_silos(
         )
         for silo in config.silos
     }
+
+
+def build_temperature_sensors(
+    config: AcquisitionConfig, *, started_mono_ns: int
+) -> TemperatureSensors | None:
+    if config.board is None:
+        return None
+    settings = config.temperatures
+    return TemperatureSensors(
+        sensor_id_by_address={sensor.address: sensor.id for sensor in config.temperature_sensors},
+        record_interval_ns=round(settings.record_interval_s * NS_PER_S),
+        max_reading_age_ns=round(settings.max_reading_age_s * NS_PER_S),
+        tick_interval_ns=round(config.engine.tick_interval_s * NS_PER_S),
+        min_valid_c=settings.min_valid_c,
+        max_valid_c=settings.max_valid_c,
+        started_mono_ns=started_mono_ns,
+    )
 
 
 def meter_wiring(
@@ -273,6 +291,7 @@ def build_acquisition(
             out_queue=record_queue,
             silos_by_meter=silos_by_meter,
             stop_event=engine_stop,
+            temperatures=build_temperature_sensors(config, started_mono_ns=clock.mono_ns()),
         ),
         writer=Writer(in_queue=record_queue, store=store, stop_event=writer_stop, clock=clock),
         store=store,

@@ -128,8 +128,8 @@ class Writer:
         self._log_skipped_readings(result)
 
     def _write_one_by_one(self, batch: list[WriterRecord]) -> None:
-        meter_inserted = 0
-        meter_total = 0
+        readings_inserted = 0
+        readings_total = 0
 
         for index, item in enumerate(batch):
             try:
@@ -138,10 +138,10 @@ class Writer:
                 remaining = len(batch) - index - 1
                 raise WriterAbandonedError(error.lost_records + remaining) from error
 
-            meter_inserted += result.meter_inserted
-            meter_total += result.meter_total
+            readings_inserted += result.readings_inserted
+            readings_total += result.readings_total
 
-        self._log_skipped_readings(WriteResult(meter_inserted, meter_total))
+        self._log_skipped_readings(WriteResult(readings_inserted, readings_total))
 
     def _write_or_reject(self, item: WriterRecord) -> WriteResult:
         try:
@@ -196,9 +196,9 @@ class Writer:
         return outcome
 
     def _log_skipped_readings(self, result: WriteResult) -> None:
-        if result.meter_inserted < result.meter_total:
+        if result.readings_inserted < result.readings_total:
             logger.warning(
                 events.DB_READINGS_SKIPPED,
-                skipped=result.meter_total - result.meter_inserted,
-                batch_size=result.meter_total,
+                skipped=result.readings_total - result.readings_inserted,
+                batch_size=result.readings_total,
             )

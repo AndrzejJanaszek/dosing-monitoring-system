@@ -4,6 +4,7 @@ from dms.acquisition.arduino.frames import (
     BoardLogLevel,
     BoardLogLine,
     PinLevels,
+    TemperatureFrameEntry,
     TemperaturesFrame,
     parse_board_line,
 )
@@ -71,14 +72,86 @@ def test_pins_frame_gives_levels() -> None:
     assert parse_board_line(line) == PinLevels({4: 1, 5: 0, 6: 1, 7: 1, 8: 0, 9: 1})
 
 
-def test_temperatures_frame_carries_no_content() -> None:
-    line = b'{"temps":[{"a":"28A8F126AB240B1C","t":21.50}]}'
+def test_temperatures_frame_gives_a_value_per_address() -> None:
+    line = b'{"temps":[{"a":"28A8F126AB240B1C","t":21.50},{"a":"28FF4A7C61160398","t":-3}]}'
 
-    assert parse_board_line(line) == TemperaturesFrame()
+    assert parse_board_line(line) == TemperaturesFrame(
+        (
+            TemperatureFrameEntry("28A8F126AB240B1C", 21.5, None),
+            TemperatureFrameEntry("28FF4A7C61160398", -3.0, None),
+        )
+    )
+
+
+def test_temperatures_entry_with_an_error_code_has_no_value() -> None:
+    line = b'{"temps":[{"a":"28A8F126AB240B1C","t":null,"e":"read_failed"}]}'
+
+    assert parse_board_line(line) == TemperaturesFrame(
+        (TemperatureFrameEntry("28A8F126AB240B1C", None, "read_failed"),)
+    )
+
+
+def test_unknown_error_code_is_passed_on_unchanged() -> None:
+    line = b'{"temps":[{"a":"28A8F126AB240B1C","t":null,"e":"crc_error"}]}'
+
+    assert parse_board_line(line) == TemperaturesFrame(
+        (TemperatureFrameEntry("28A8F126AB240B1C", None, "crc_error"),)
+    )
 
 
 def test_empty_temperatures_frame_is_accepted() -> None:
-    assert parse_board_line(b'{"temps":[]}') == TemperaturesFrame()
+    assert parse_board_line(b'{"temps":[]}') == TemperaturesFrame(())
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(b'{"temps":[5]}', id="entry-not-an-object"),
+        pytest.param(b'{"temps":[{"a":"28a8f126ab240b1c","t":1.0}]}', id="lowercase-address"),
+        pytest.param(b'{"temps":[{"a":"28A8","t":1.0}]}', id="short-address"),
+        pytest.param(
+            b'{"temps":[{"a":"28A8F126AB240B1C\\n","t":1.0}]}', id="address-with-trailing-newline"
+        ),
+        pytest.param(b'{"temps":[{"a":5,"t":1.0}]}', id="address-not-a-string"),
+        pytest.param(b'{"temps":[{"t":1.0}]}', id="missing-address"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C"}]}', id="missing-value"),
+        pytest.param(
+            b'{"temps":[{"a":"28A8F126AB240B1C","t":1.0},{"a":"28A8F126AB240B1C","t":2.0}]}',
+            id="repeated-address",
+        ),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":"21.5"}]}', id="value-as-string"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":true}]}', id="value-as-boolean"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":NaN}]}', id="value-nan"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":Infinity}]}', id="value-infinite"),
+        pytest.param(
+            b'{"temps":[{"a":"28A8F126AB240B1C","t":1' + b"0" * 400 + b"}]}",
+            id="value-huge-integer",
+        ),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":1000.0}]}', id="value-too-large"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":999.995}]}', id="value-rounds-up"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":-1000}]}', id="value-too-small"),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":null}]}', id="null-without-code"),
+        pytest.param(
+            b'{"temps":[{"a":"28A8F126AB240B1C","t":1.0,"e":"read_failed"}]}',
+            id="code-with-value",
+        ),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":null,"e":""}]}', id="empty-code"),
+        pytest.param(
+            b'{"temps":[{"a":"28A8F126AB240B1C","t":null,"e":5}]}', id="code-not-a-string"
+        ),
+        pytest.param(b'{"temps":[{"a":"28A8F126AB240B1C","t":1.0,"x":1}]}', id="unknown-key"),
+    ],
+)
+def test_malformed_temperature_entries_reject_the_whole_frame(line: bytes) -> None:
+    assert parse_board_line(line) is None
+
+
+def test_largest_storable_temperature_is_accepted() -> None:
+    line = b'{"temps":[{"a":"28A8F126AB240B1C","t":-999.99}]}'
+
+    assert parse_board_line(line) == TemperaturesFrame(
+        (TemperatureFrameEntry("28A8F126AB240B1C", -999.99, None),)
+    )
 
 
 @pytest.mark.parametrize(
@@ -118,7 +191,9 @@ def test_simulator_frames_are_understood() -> None:
     temperatures = encode_temperatures_frame((("28A8F126AB240B1C", 21.5),)).removesuffix(b"\r\n")
 
     assert parse_board_line(pins) == PinLevels({4: 0, 5: 1})
-    assert parse_board_line(temperatures) == TemperaturesFrame()
+    assert parse_board_line(temperatures) == TemperaturesFrame(
+        (TemperatureFrameEntry("28A8F126AB240B1C", 21.5, None),)
+    )
 
 
 def test_every_simulator_banner_line_is_a_log_line() -> None:

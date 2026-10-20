@@ -8,7 +8,7 @@ from dms.acquisition.arduino.mapping import SignalMapper
 from dms.acquisition.serial.adapter import FrameOutcome
 from dms.acquisition.serial.framing import Framer
 from dms.domain.events import EventKind
-from dms.messages import EngineMessage, SignalStates, TankSignals
+from dms.messages import EngineMessage, SignalStates, TankSignals, TemperatureReadings
 from dms.simulator.catalog import SCENARIOS
 from dms.simulator.dms_config import acquisition_config
 from dms.simulator.encoders import encode_banner, encode_sample
@@ -53,6 +53,7 @@ def test_signals_read_from_simulated_board_match_the_scenario(
         assert handler.handle(frame, 0, 0) is FrameOutcome.IGNORED
 
     expected: list[SignalStates] = []
+    temperature_frames = 0
     for sample in scenario_samples(scenario):
         if not isinstance(sample, PinsSample | TemperaturesSample):
             continue
@@ -61,10 +62,15 @@ def test_signals_read_from_simulated_board_match_the_scenario(
             assert handler.handle(frame, sample.at_ns, sample.at_ns) is FrameOutcome.ACCEPTED
         if isinstance(sample, PinsSample):
             expected.append(expected_states(scenario, sample.at_ns))
+        else:
+            temperature_frames += 1
 
     received: list[EngineMessage] = []
     while not messages.empty():
         received.append(messages.get_nowait())
     assert expected
     assert framer.rejected_count == 0
-    assert received == expected
+    assert [message for message in received if isinstance(message, SignalStates)] == expected
+    assert len([message for message in received if isinstance(message, TemperatureReadings)]) == (
+        temperature_frames
+    )
