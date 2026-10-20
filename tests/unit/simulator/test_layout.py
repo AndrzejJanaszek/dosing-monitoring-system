@@ -134,7 +134,7 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
         ),
         "board.sensors[0].leg: leg requires a silo_id",
     ),
-    "sensor-leg-below-one": (
+    "sensor-leg-below-range": (
         lambda: PlantLayout(
             one_tank_layout().silos,
             SignalBoard(
@@ -145,7 +145,20 @@ INVALID_LAYOUTS: dict[str, tuple[Callable[[], object], str]] = {
                 )
             ),
         ),
-        "board.sensors[0].leg: 0 is below 1",
+        "board.sensors[0].leg: 0 is outside 1..32767",
+    ),
+    "sensor-leg-above-range": (
+        lambda: PlantLayout(
+            one_tank_layout().silos,
+            SignalBoard(
+                sensors=(
+                    TemperatureSensor(
+                        id=1, address="28A8F126AB240B1C", temperature_c=20.0, silo_id=1, leg=32768
+                    ),
+                )
+            ),
+        ),
+        "board.sensors[0].leg: 32768 is outside 1..32767",
     ),
     "silo-id-out-of-range": (
         lambda: PlantLayout((SiloLayout(id=0, tanks=(tank(1, 4, 5),)),)),

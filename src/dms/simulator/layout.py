@@ -241,8 +241,8 @@ def _sensor_errors(layout: PlantLayout) -> list[str]:
         if sensor.leg is not None and sensor.silo_id is None:
             errors.append(f"{path}.leg: leg requires a silo_id")
 
-        if sensor.leg is not None and sensor.leg < MIN_LEG:
-            errors.append(f"{path}.leg: {sensor.leg} is below {MIN_LEG}")
+        if sensor.leg is not None and not MIN_LEG <= sensor.leg <= MAX_SMALLINT:
+            errors.append(f"{path}.leg: {sensor.leg} is outside {MIN_LEG}..{MAX_SMALLINT}")
     return errors
 
 
