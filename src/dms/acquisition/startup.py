@@ -11,7 +11,9 @@ from dms.persistence.catalog import (
     start_run,
     sync_silos,
     sync_tanks,
+    sync_temperature_sensors,
     tank_identity_violations,
+    temperature_sensor_identity_violations,
 )
 from dms.persistence.schema import (
     MigrationFilesError,
@@ -46,9 +48,10 @@ def run_startup_sequence(
         raise StartupError(str(error)) from error
     try:
         with connection.transaction():
-            _refuse_moved_tanks(connection, config)
+            _refuse_identity_violations(connection, config)
             silos = sync_silos(connection, config.silos)
             tanks = sync_tanks(connection, config.tanks)
+            temperature_sensors = sync_temperature_sensors(connection, config.temperature_sensors)
             run_id = start_run(
                 connection,
                 importlib.metadata.version(PACKAGE_NAME),
@@ -66,6 +69,9 @@ def run_startup_sequence(
         tanks_added=list(tanks.added),
         tanks_reactivated=list(tanks.reactivated),
         tanks_deactivated=list(tanks.deactivated),
+        temperature_sensors_added=list(temperature_sensors.added),
+        temperature_sensors_reactivated=list(temperature_sensors.reactivated),
+        temperature_sensors_deactivated=list(temperature_sensors.deactivated),
     )
 
     if crashed_events:
@@ -80,12 +86,14 @@ def run_startup_sequence(
     return run_id
 
 
-def _refuse_moved_tanks(
+def _refuse_identity_violations(
     connection: psycopg.Connection[TupleRow], config: AcquisitionConfig
 ) -> None:
-    violations = tank_identity_violations(connection, config.tanks)
-    if not violations:
+    moved_tanks = tank_identity_violations(connection, config.tanks)
+    moved_sensors = temperature_sensor_identity_violations(connection, config.temperature_sensors)
+    if not moved_tanks and not moved_sensors:
         return
+
     logger.critical(
         events.CATALOG_IDENTITY_VIOLATION,
         tanks=[
@@ -94,9 +102,23 @@ def _refuse_moved_tanks(
                 "database_silo_id": move.database_silo_id,
                 "config_silo_id": move.config_silo_id,
             }
-            for move in violations
+            for move in moved_tanks
+        ],
+        temperature_sensors=[
+            {
+                "sensor_id": move.sensor_id,
+                "database_silo_id": move.database_silo_id,
+                "database_leg": move.database_leg,
+                "config_silo_id": move.config_silo_id,
+                "config_leg": move.config_leg,
+            }
+            for move in moved_sensors
         ],
     )
     raise StartupError(
-        "tanks moved to a different silo: " + ", ".join(str(move.tank_id) for move in violations)
+        "catalog identity violated: "
+        + ", ".join(
+            [f"tank {move.tank_id}" for move in moved_tanks]
+            + [f"temperature sensor {move.sensor_id}" for move in moved_sensors]
+        )
     )
