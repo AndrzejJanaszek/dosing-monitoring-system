@@ -24,7 +24,7 @@ from dms.config.models import (
 )
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
-from dms.domain.temperatures import TemperatureError
+from dms.domain.temperature_error import TemperatureError
 from dms.logs import events
 from dms.persistence.catalog import (
     SyncResult,

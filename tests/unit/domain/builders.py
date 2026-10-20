@@ -1,13 +1,19 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from itertools import count
 from uuid import UUID
 
 from dms.domain.silo import Silo
+from dms.domain.temperatures import TemperatureSensors
+from dms.messages import TemperatureEntry, TemperatureReadings
 from dms.units import NS_PER_S
 
 MAX_READING_AGE_NS = NS_PER_S
 MAX_SIGNAL_AGE_NS = NS_PER_S
 READING_CACHE_WINDOW_NS = 60 * NS_PER_S
+SENSOR_ADDRESS = "28A8F126AB240B1C"
+SENSOR_ID = 3
+OTHER_ADDRESS = "28FF4A7C61160398"
+WALL_OFFSET_NS = 1_000
 
 
 def sequential_ids() -> Callable[[], UUID]:
@@ -34,4 +40,37 @@ def build_silo(
         new_event_id=new_event_id if new_event_id is not None else sequential_ids(),
         started_wall_ns=started_wall_ns,
         started_mono_ns=started_mono_ns,
+    )
+
+
+def build_temperature_sensors(
+    sensor_id_by_address: Mapping[str, int] | None = None,
+    *,
+    record_interval_ns: int = NS_PER_S,
+    max_reading_age_ns: int = 5 * NS_PER_S,
+    tick_interval_ns: int = NS_PER_S,
+    min_valid_c: float = -40.0,
+    max_valid_c: float = 80.0,
+    started_mono_ns: int = 0,
+) -> TemperatureSensors:
+    return TemperatureSensors(
+        sensor_id_by_address=sensor_id_by_address
+        if sensor_id_by_address is not None
+        else {SENSOR_ADDRESS: SENSOR_ID},
+        record_interval_ns=record_interval_ns,
+        max_reading_age_ns=max_reading_age_ns,
+        tick_interval_ns=tick_interval_ns,
+        min_valid_c=min_valid_c,
+        max_valid_c=max_valid_c,
+        started_mono_ns=started_mono_ns,
+    )
+
+
+def temperature_readings(
+    at_s: float, *entries: tuple[str, float | None, str | None]
+) -> TemperatureReadings:
+    return TemperatureReadings(
+        entries=tuple(TemperatureEntry(*entry) for entry in entries),
+        wall_ns=WALL_OFFSET_NS + round(at_s * NS_PER_S),
+        mono_ns=round(at_s * NS_PER_S),
     )

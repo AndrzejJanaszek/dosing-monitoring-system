@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from dms.domain.events import ClosedEvent, StartedEvent
-from dms.domain.temperatures import TemperatureError
+from dms.domain.temperature_error import TemperatureError
 
 
 @dataclass(frozen=True, slots=True)

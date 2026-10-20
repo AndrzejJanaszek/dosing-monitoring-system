@@ -6,7 +6,7 @@ from psycopg import sql
 from psycopg.rows import TupleRow
 
 from dms.domain.events import EndQuality, EventKind, EventStatus, StartQuality
-from dms.domain.temperatures import TemperatureError
+from dms.domain.temperature_error import TemperatureError
 from dms.persistence.record_store import EventOrigin
 
 
