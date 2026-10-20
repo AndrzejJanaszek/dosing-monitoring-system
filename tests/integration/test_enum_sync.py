@@ -6,6 +6,7 @@ from psycopg import sql
 from psycopg.rows import TupleRow
 
 from dms.domain.events import EndQuality, EventKind, EventStatus, StartQuality
+from dms.domain.temperatures import TemperatureError
 from dms.persistence.record_store import EventOrigin
 
 
@@ -17,6 +18,7 @@ from dms.persistence.record_store import EventOrigin
         pytest.param(EventStatus, "event_status", id="event-status"),
         pytest.param(StartQuality, "start_quality", id="start-quality"),
         pytest.param(EndQuality, "end_quality", id="end-quality"),
+        pytest.param(TemperatureError, "temperature_error", id="temperature-error"),
     ],
 )
 def test_string_enum_has_the_values_of_the_database_enum(
