@@ -1,11 +1,12 @@
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 
 from dms.config.models import (
     MAX_SMALLINT,
     MAX_TANKS_PER_SILO,
+    MIN_LEG,
     PIN_LEVELS,
+    SENSOR_ADDRESS_PATTERN,
     BaudRate,
     MeterFormat,
 )
@@ -25,7 +26,6 @@ MIN_DEVICE_PERIOD_S = 0.001
 MAX_METER_RATE_HZ = 1 / MIN_DEVICE_PERIOD_S
 MIN_ID = 1
 MIN_TANKS_PER_SILO = 1
-SENSOR_ADDRESS_PATTERN = re.compile(r"^[0-9A-F]{16}$")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -71,10 +71,19 @@ class SiloLayout:
         return self.name if self.name is not None else f"Silos {self.id}"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TemperatureSensor:
+    id: int
     address: str
     temperature_c: float
+    silo_id: int | None = None
+    leg: int | None = None
+    name: str | None = None
+    configured: bool = True
+
+    @property
+    def display_name(self) -> str:
+        return self.name if self.name is not None else f"Czujnik {self.id}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -117,6 +126,7 @@ def layout_errors(layout: PlantLayout) -> list[str]:
         *_tank_errors(layout),
         *_input_errors(layout),
         *_board_errors(layout.board),
+        *_sensor_errors(layout),
         *_meter_errors(layout),
         *_device_id_errors(layout),
     ]
@@ -209,6 +219,30 @@ def _board_errors(board: SignalBoard) -> list[str]:
         )
         if value < MIN_DEVICE_PERIOD_S
     )
+    return errors
+
+
+def _sensor_errors(layout: PlantLayout) -> list[str]:
+    errors: list[str] = []
+    silo_ids = {silo.id for silo in layout.silos}
+    seen: set[int] = set()
+    for index, sensor in enumerate(layout.board.sensors):
+        path = f"board.sensors[{index}]"
+        if sensor.id in seen:
+            errors.append(f"{path}.id: duplicate sensor id {sensor.id}")
+        seen.add(sensor.id)
+
+        if not MIN_ID <= sensor.id <= MAX_SMALLINT:
+            errors.append(f"{path}.id: {sensor.id} is outside {MIN_ID}..{MAX_SMALLINT}")
+
+        if sensor.silo_id is not None and sensor.silo_id not in silo_ids:
+            errors.append(f"{path}.silo_id: unknown silo {sensor.silo_id}")
+
+        if sensor.leg is not None and sensor.silo_id is None:
+            errors.append(f"{path}.leg: leg requires a silo_id")
+
+        if sensor.leg is not None and not MIN_LEG <= sensor.leg <= MAX_SMALLINT:
+            errors.append(f"{path}.leg: {sensor.leg} is outside {MIN_LEG}..{MAX_SMALLINT}")
     return errors
 
 

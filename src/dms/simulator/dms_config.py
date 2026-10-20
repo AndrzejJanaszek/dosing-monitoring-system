@@ -9,6 +9,7 @@ from dms.config.models import (
     MeterConfig,
     SiloConfig,
     TankConfig,
+    TemperatureSensorConfig,
 )
 from dms.simulator.encoders import BOARD_FRAME_END
 from dms.simulator.layout import Input, PlantLayout
@@ -58,7 +59,24 @@ def acquisition_config(
         for silo in layout.silos
         for tank in silo.tanks
     )
-    return AcquisitionConfig(meters=meters, silos=silos, board=board, tanks=tanks)
+    temperature_sensors = tuple(
+        TemperatureSensorConfig(
+            id=sensor.id,
+            name=sensor.display_name,
+            address=sensor.address,
+            silo_id=sensor.silo_id,
+            leg=sensor.leg,
+        )
+        for sensor in layout.board.sensors
+        if sensor.configured
+    )
+    return AcquisitionConfig(
+        meters=meters,
+        silos=silos,
+        board=board,
+        tanks=tanks,
+        temperature_sensors=temperature_sensors,
+    )
 
 
 def _input_config(signal: Input) -> InputConfig:

@@ -9,7 +9,7 @@ from psycopg import sql
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
-from dms.config.models import SiloConfig, TankConfig
+from dms.config.models import SiloConfig, TankConfig, TemperatureSensorConfig
 
 CLOSE_CRASHED_EVENTS_SQL = """
 UPDATE dms.tank_event AS event
@@ -54,6 +54,16 @@ UPSERT_TANK_SQL = (
     " ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, active = true"
 )
 
+UPSERT_TEMPERATURE_SENSOR_SQL = (
+    "INSERT INTO dms.temperature_sensor (id, name, silo_id, leg, active)"
+    " VALUES (%s, %s, %s, %s, true)"
+    " ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, leg = EXCLUDED.leg, active = true"
+)
+
+SELECT_TEMPERATURE_SENSOR_PLACEMENTS_SQL = (
+    "SELECT id, silo_id, leg FROM dms.temperature_sensor WHERE id = ANY(%s) ORDER BY id"
+)
+
 SELECT_TANK_SILOS_SQL = "SELECT id, silo_id FROM dms.tank WHERE id = ANY(%s) ORDER BY id"
 
 SELECT_CATALOG_ACTIVITY_SQL = "SELECT id, active FROM {table}"
@@ -70,6 +80,7 @@ class RunNotStartedError(Exception):
 class _CatalogTable(StrEnum):
     SILO = "silo"
     TANK = "tank"
+    TEMPERATURE_SENSOR = "temperature_sensor"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +95,15 @@ class TankMove:
     tank_id: int
     database_silo_id: int
     config_silo_id: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TemperatureSensorMove:
+    sensor_id: int
+    database_silo_id: int | None
+    database_leg: int | None
+    config_silo_id: int | None
+    config_leg: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +164,38 @@ def tank_identity_violations(
         TankMove(tank_id, database_silo_id, config_silo_by_tank[tank_id])
         for tank_id, database_silo_id in rows
         if database_silo_id != config_silo_by_tank[tank_id]
+    ]
+
+
+def sync_temperature_sensors(
+    connection: psycopg.Connection[TupleRow], sensors: Sequence[TemperatureSensorConfig]
+) -> SyncResult:
+    return _sync_catalog(
+        connection,
+        table=_CatalogTable.TEMPERATURE_SENSOR,
+        upsert_sql=UPSERT_TEMPERATURE_SENSOR_SQL,
+        rows=[(sensor.id, sensor.name, sensor.silo_id, sensor.leg) for sensor in sensors],
+    )
+
+
+def temperature_sensor_identity_violations(
+    connection: psycopg.Connection[TupleRow], sensors: Sequence[TemperatureSensorConfig]
+) -> list[TemperatureSensorMove]:
+    config_by_sensor = {sensor.id: sensor for sensor in sensors}
+    rows = connection.execute(
+        SELECT_TEMPERATURE_SENSOR_PLACEMENTS_SQL, [list(config_by_sensor)]
+    ).fetchall()
+    return [
+        TemperatureSensorMove(
+            sensor_id=sensor_id,
+            database_silo_id=database_silo_id,
+            database_leg=database_leg,
+            config_silo_id=config_by_sensor[sensor_id].silo_id,
+            config_leg=config_by_sensor[sensor_id].leg,
+        )
+        for sensor_id, database_silo_id, database_leg in rows
+        if database_silo_id != config_by_sensor[sensor_id].silo_id
+        or (database_leg is not None and database_leg != config_by_sensor[sensor_id].leg)
     ]
 
 

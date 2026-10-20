@@ -130,9 +130,11 @@ The tests then use that server instead of a container. They still work in their 
 
 ## Configuration and logging
 
-Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`, optional `[board]` and `[[tanks]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
+Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`, optional `[board]`, `[[tanks]]` and `[[temperature_sensors]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
 
 `[board]` describes the Arduino signal module (a serial port like a meter's) and `[[tanks]]` assign its pins to tank signals: `dispense = { pin = 4, active_level = 0 }` means the tank dispenses while pin 4 reads 0. `active_level` is mandatory, `0` or `1`; a pin can be assigned once; a silo has at most two tanks; tanks need `[board]`. A silo without tanks is allowed. `max_frame_length` (optional, in `[[meters]]` and `[board]`; defaults 64 and 512 bytes) caps the length of one frame; longer ones are dropped and counted as garbage. A tank `id` is never reused for another tank, and a tank never moves to another silo: startup is refused (`catalog.identity_violation`) when the database knows the tank under a different silo. Tanks removed from the file stay in `dms.tank` as inactive.
+
+`[[temperature_sensors]]` list the DS18B20 sensors on the board: `id`, `name`, `address` (16 upper-case hex digits), optional `silo_id` (without it the sensor measures the ambient) and optional `leg` (a number from 1, only with `silo_id`). Ids and addresses are unique, and the sensors need `[board]`. Like a tank, a sensor with a given `id` never changes its silo or leg (startup is refused with `catalog.identity_violation`), except that an empty leg may be filled; `name` and `address` may change. Sensors removed from the file stay in `dms.temperature_sensor` as inactive. The address lives only in the configuration and in the `config` snapshot of each run.
 
 Logs are structured (structlog). `format = "auto"` prints a human-readable console format on a terminal and JSON otherwise; standard library logs go through the same renderer. Event names are listed in [docs/log-events.md](docs/log-events.md).
 
@@ -175,7 +177,7 @@ Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings
 | Exit code of `dms-acquisition` | Meaning |
 |---|---|
 | 0 | clean shutdown |
-| 1 | startup failed (database unreachable, schema incompatible, a tank moved to another silo), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
+| 1 | startup failed (database unreachable, schema incompatible, a tank or temperature sensor moved to another silo or leg), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
 | 2 | configuration invalid; all errors are printed |
 
 A meter or the Arduino module that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.

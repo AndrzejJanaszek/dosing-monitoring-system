@@ -35,3 +35,21 @@ name = "Zbiornik 1"
 silo_id = 1
 dispense = { pin = 4, active_level = 0 }
 refill = { pin = 5, active_level = 0 }
+
+# A temperature sensor id is never reused for another sensor, and a sensor never changes its silo
+# or leg (nor moves between a silo and the ambient): startup is refused if the database knows
+# the sensor differently. Filling an empty leg and changing name or address are allowed.
+# Without silo_id the sensor measures the ambient temperature.
+[[temperature_sensors]]
+id = 1
+name = "Czujnik 1"
+address = "28A8F126AB240B1C"
+silo_id = 1
+leg = 1
+
+[[temperature_sensors]]
+id = 2
+name = "Czujnik 2"
+address = "28FF4A7C61160398"
+silo_id = 1
+leg = 2

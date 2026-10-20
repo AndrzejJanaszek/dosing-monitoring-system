@@ -89,6 +89,14 @@ dispense = {{ pin = {dispense_pin}, active_level = {active_level} }}
 refill = {{ pin = {refill_pin}, active_level = 0 }}
 """
 
+SENSOR_BLOCK = """
+[[temperature_sensors]]
+id = {id}
+name = "Czujnik {id}"
+address = "{address}"
+{extra}
+"""
+
 BASE_PLANT = (
     METER_BLOCK.format(id="m1", port="/a")
     + SILO_BLOCK.format(id=1, meter_id="m1")
@@ -110,6 +118,10 @@ def tank_block(
         refill_pin=refill_pin,
         active_level=active_level,
     )
+
+
+def sensor_block(sensor_id: int = 1, address: str = "28A8F126AB240B1C", extra: str = "") -> str:
+    return SENSOR_BLOCK.format(id=sensor_id, address=address, extra=extra)
 
 
 def write(directory: Path, name: str, content: str) -> None:
@@ -393,3 +405,100 @@ def test_invalid_pin_is_rejected(tmp_path: Path, pin: str) -> None:
     (error,) = errors_of(tmp_path)
 
     assert error.startswith("acquisition.toml: tanks[0].dispense.pin:")
+
+
+def test_temperature_sensors_are_loaded_with_optional_silo_and_leg(tmp_path: Path) -> None:
+    content = (
+        BASE_PLANT
+        + sensor_block(1, extra="silo_id = 1\nleg = 2")
+        + sensor_block(2, "28FF4A7C61160398")
+    )
+    write(tmp_path, "acquisition.toml", content)
+
+    config = load_acquisition(tmp_path)
+
+    assert [(sensor.id, sensor.silo_id, sensor.leg) for sensor in config.temperature_sensors] == [
+        (1, 1, 2),
+        (2, None, None),
+    ]
+
+
+def test_configuration_without_temperature_sensors_is_valid(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT)
+
+    assert load_acquisition(tmp_path).temperature_sensors == ()
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        pytest.param(
+            sensor_block(1) + sensor_block(1, "28FF4A7C61160398"),
+            "temperature_sensors[1].id: duplicate id '1'",
+            id="duplicate-id",
+        ),
+        pytest.param(
+            sensor_block(1) + sensor_block(2),
+            "temperature_sensors[1].address: duplicate address '28A8F126AB240B1C'",
+            id="duplicate-address",
+        ),
+        pytest.param(
+            sensor_block(1, extra="silo_id = 9"),
+            "temperature_sensors[0].silo_id: unknown silo 9",
+            id="sensor-in-unknown-silo",
+        ),
+        pytest.param(
+            sensor_block(1, extra="leg = 1"),
+            "temperature_sensors[0].leg: leg requires a silo_id",
+            id="leg-without-silo",
+        ),
+    ],
+)
+def test_invalid_temperature_sensor_layout_is_reported(
+    tmp_path: Path, content: str, message: str
+) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + content)
+
+    assert errors_of(tmp_path) == [f"acquisition.toml: {message}"]
+
+
+def test_temperature_sensors_without_board_are_reported(tmp_path: Path) -> None:
+    plant = METER_BLOCK.format(id="m1", port="/a") + SILO_BLOCK.format(id=1, meter_id="m1")
+    write(tmp_path, "acquisition.toml", plant + sensor_block(1))
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: temperature_sensors: temperature sensors require a [board] section"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("address", '"28a8f126ab240b1c"', id="lowercase-address"),
+        pytest.param("address", '"28A8"', id="short-address"),
+        pytest.param("id", "0", id="zero-id"),
+        pytest.param("name", '""', id="empty-name"),
+    ],
+)
+def test_invalid_temperature_sensor_field_is_rejected(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    lines = sensor_block(1).splitlines()
+    content = "\n".join(
+        f"{field} = {value}" if line.startswith(f"{field} =") else line for line in lines
+    )
+    write(tmp_path, "acquisition.toml", BASE_PLANT + content)
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith(f"acquisition.toml: temperature_sensors[0].{field}:")
+
+
+@pytest.mark.parametrize("leg", ["0", "32768"])
+def test_leg_outside_the_allowed_range_is_rejected(tmp_path: Path, leg: str) -> None:
+    extra = f"silo_id = 1\nleg = {leg}"
+    write(tmp_path, "acquisition.toml", BASE_PLANT + sensor_block(1, extra=extra))
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith("acquisition.toml: temperature_sensors[0].leg:")

@@ -19,6 +19,7 @@ from dms.config.models import (
     MeterFormat,
     SiloConfig,
     TankConfig,
+    TemperatureSensorConfig,
 )
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import MeterRecord, WriterRecord
@@ -26,11 +27,14 @@ from dms.logs import events
 from dms.persistence.catalog import (
     SyncResult,
     TankMove,
+    TemperatureSensorMove,
     start_run,
     stop_run,
     sync_silos,
     sync_tanks,
+    sync_temperature_sensors,
     tank_identity_violations,
+    temperature_sensor_identity_violations,
 )
 from dms.persistence.connection import DatabaseUnreachableError, connect_with_retry
 from dms.persistence.record_store import DataStoreError, PostgresRecordStore, timestamp_from_ns
@@ -65,8 +69,27 @@ def tank(tank_id: int, silo_id: int = 1, name: str = "Zbiornik") -> TankConfig:
     )
 
 
+def temperature_sensor(
+    sensor_id: int,
+    *,
+    silo_id: int | None = None,
+    leg: int | None = None,
+    name: str = "Czujnik",
+    address: str | None = None,
+) -> TemperatureSensorConfig:
+    return TemperatureSensorConfig(
+        id=sensor_id,
+        name=f"{name} {sensor_id}",
+        address=address or f"28A8F126AB24{sensor_id:04X}",
+        silo_id=silo_id,
+        leg=leg,
+    )
+
+
 def acquisition_config(
-    silos: list[SiloConfig], tanks: list[TankConfig] | None = None
+    silos: list[SiloConfig],
+    tanks: list[TankConfig] | None = None,
+    temperature_sensors: list[TemperatureSensorConfig] | None = None,
 ) -> AcquisitionConfig:
     meters = tuple(
         MeterConfig(
@@ -89,11 +112,15 @@ def acquisition_config(
             reconnect_delay_s=5.0,
             silence_timeout_s=5.0,
         )
-        if tanks
+        if tanks or temperature_sensors
         else None
     )
     return AcquisitionConfig(
-        meters=meters, silos=tuple(silos), board=board, tanks=tuple(tanks or ())
+        meters=meters,
+        silos=tuple(silos),
+        board=board,
+        tanks=tuple(tanks or ()),
+        temperature_sensors=tuple(temperature_sensors or ()),
     )
 
 
@@ -190,6 +217,229 @@ def test_tank_in_another_silo_is_a_violation_also_when_inactive(
     )
 
     assert violations == [TankMove(1, 1, 2), TankMove(2, 2, 1)]
+
+
+def test_sync_temperature_sensors_reports_added_reactivated_and_deactivated(
+    writer_connection: psycopg.Connection[TupleRow],
+) -> None:
+    sensors = [temperature_sensor(1), temperature_sensor(2, silo_id=1, leg=1)]
+
+    assert sync_temperature_sensors(writer_connection, sensors) == SyncResult((1, 2), (), ())
+    assert sync_temperature_sensors(writer_connection, sensors[:1]) == SyncResult((), (), (2,))
+    assert sync_temperature_sensors(writer_connection, sensors) == SyncResult((), (2,), ())
+    assert rows(
+        writer_connection,
+        "SELECT id, silo_id, leg, name, active FROM dms.temperature_sensor ORDER BY id",
+    ) == [(1, None, None, "Czujnik 1", True), (2, 1, 1, "Czujnik 2", True)]
+
+
+def test_sync_temperature_sensors_renames_and_fills_an_empty_leg(
+    writer_connection: psycopg.Connection[TupleRow],
+) -> None:
+    sync_temperature_sensors(writer_connection, [temperature_sensor(1, silo_id=1)])
+
+    sync_temperature_sensors(
+        writer_connection, [temperature_sensor(1, silo_id=1, leg=2, name="Noga")]
+    )
+
+    assert rows(writer_connection, "SELECT silo_id, leg, name FROM dms.temperature_sensor") == [
+        (1, 2, "Noga 1")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stored", "configured", "expected"),
+    [
+        pytest.param(
+            temperature_sensor(1, silo_id=1, leg=1),
+            temperature_sensor(1, silo_id=2, leg=1),
+            TemperatureSensorMove(
+                sensor_id=1, database_silo_id=1, database_leg=1, config_silo_id=2, config_leg=1
+            ),
+            id="silo-changed",
+        ),
+        pytest.param(
+            temperature_sensor(1),
+            temperature_sensor(1, silo_id=1),
+            TemperatureSensorMove(
+                sensor_id=1,
+                database_silo_id=None,
+                database_leg=None,
+                config_silo_id=1,
+                config_leg=None,
+            ),
+            id="ambient-to-silo",
+        ),
+        pytest.param(
+            temperature_sensor(1, silo_id=1),
+            temperature_sensor(1),
+            TemperatureSensorMove(
+                sensor_id=1,
+                database_silo_id=1,
+                database_leg=None,
+                config_silo_id=None,
+                config_leg=None,
+            ),
+            id="silo-to-ambient",
+        ),
+        pytest.param(
+            temperature_sensor(1, silo_id=1, leg=1),
+            temperature_sensor(1, silo_id=1, leg=2),
+            TemperatureSensorMove(
+                sensor_id=1, database_silo_id=1, database_leg=1, config_silo_id=1, config_leg=2
+            ),
+            id="leg-changed",
+        ),
+        pytest.param(
+            temperature_sensor(1, silo_id=1, leg=1),
+            temperature_sensor(1, silo_id=1),
+            TemperatureSensorMove(
+                sensor_id=1, database_silo_id=1, database_leg=1, config_silo_id=1, config_leg=None
+            ),
+            id="leg-cleared",
+        ),
+    ],
+)
+def test_temperature_sensor_identity_change_is_a_violation(
+    writer_connection: psycopg.Connection[TupleRow],
+    stored: TemperatureSensorConfig,
+    configured: TemperatureSensorConfig,
+    expected: TemperatureSensorMove,
+) -> None:
+    sync_silos(writer_connection, [silo(1), silo(2)])
+    sync_temperature_sensors(writer_connection, [stored])
+
+    assert temperature_sensor_identity_violations(writer_connection, [configured]) == [expected]
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        pytest.param(temperature_sensor(1, silo_id=1, leg=1, name="Nowa"), id="name-changed"),
+        pytest.param(
+            temperature_sensor(1, silo_id=1, leg=1, address="28FF4A7C61160398"),
+            id="address-changed",
+        ),
+    ],
+)
+def test_temperature_sensor_rename_or_new_address_is_not_a_violation(
+    writer_connection: psycopg.Connection[TupleRow], configured: TemperatureSensorConfig
+) -> None:
+    sync_temperature_sensors(writer_connection, [temperature_sensor(1, silo_id=1, leg=1)])
+
+    assert temperature_sensor_identity_violations(writer_connection, [configured]) == []
+
+
+def test_empty_leg_may_be_filled_without_violation(
+    writer_connection: psycopg.Connection[TupleRow],
+) -> None:
+    sync_temperature_sensors(writer_connection, [temperature_sensor(1, silo_id=1)])
+
+    violations = temperature_sensor_identity_violations(
+        writer_connection, [temperature_sensor(1, silo_id=1, leg=3)]
+    )
+
+    assert violations == []
+
+
+def test_startup_sequence_stores_temperature_sensors_and_their_addresses(
+    fresh_database: str,
+) -> None:
+    migrate_as_owner(fresh_database)
+    sensors = [temperature_sensor(1, silo_id=1, leg=1), temperature_sensor(2)]
+    config = acquisition_config([silo(1)], temperature_sensors=sensors)
+
+    with capture_logs() as logs, connect_as(fresh_database, WRITER_ROLE) as connection:
+        run_id = run_startup_sequence(connection, config)
+
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(
+            reader, "SELECT id, silo_id, leg, name, active FROM dms.temperature_sensor ORDER BY id"
+        ) == [(1, 1, 1, "Czujnik 1", True), (2, None, None, "Czujnik 2", True)]
+        stored_config = rows(reader, f"SELECT config FROM dms.run WHERE id = {run_id}")[0][0]
+        assert [item["address"] for item in stored_config["temperature_sensors"]] == [
+            "28A8F126AB240001",
+            "28A8F126AB240002",
+        ]
+    (synced,) = [entry for entry in logs if entry["event"] == events.CATALOG_SYNCED]
+    assert synced["temperature_sensors_added"] == [1, 2]
+    assert synced["temperature_sensors_deactivated"] == []
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        pytest.param(temperature_sensor(1, silo_id=2, leg=1), id="silo-changed"),
+        pytest.param(temperature_sensor(1), id="silo-to-ambient"),
+        pytest.param(temperature_sensor(1, silo_id=1, leg=2), id="leg-changed"),
+        pytest.param(temperature_sensor(1, silo_id=1), id="leg-cleared"),
+    ],
+)
+def test_startup_sequence_refuses_moved_temperature_sensor_and_changes_nothing(
+    fresh_database: str, configured: TemperatureSensorConfig
+) -> None:
+    migrate_as_owner(fresh_database)
+    silos = [silo(1), silo(2)]
+    stored = temperature_sensor(1, silo_id=1, leg=1)
+    with connect_as(fresh_database, WRITER_ROLE) as connection:
+        run_startup_sequence(connection, acquisition_config(silos, temperature_sensors=[stored]))
+
+    with (
+        capture_logs() as logs,
+        connect_as(fresh_database, WRITER_ROLE) as connection,
+        pytest.raises(StartupError),
+    ):
+        run_startup_sequence(
+            connection, acquisition_config(silos, temperature_sensors=[configured])
+        )
+
+    assert [entry["event"] for entry in logs] == [events.CATALOG_IDENTITY_VIOLATION]
+    assert logs[0]["tanks"] == []
+    assert [item["sensor_id"] for item in logs[0]["temperature_sensors"]] == [1]
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT count(*) FROM dms.run") == [(1,)]
+        assert rows(reader, "SELECT silo_id, leg FROM dms.temperature_sensor") == [(1, 1)]
+
+
+def test_startup_sequence_reports_moved_tanks_and_sensors_together(fresh_database: str) -> None:
+    migrate_as_owner(fresh_database)
+    silos = [silo(1), silo(2)]
+    with connect_as(fresh_database, WRITER_ROLE) as connection:
+        run_startup_sequence(
+            connection,
+            acquisition_config(silos, [tank(1)], [temperature_sensor(1, silo_id=1)]),
+        )
+    moved = acquisition_config(silos, [tank(1, silo_id=2)], [temperature_sensor(1, silo_id=2)])
+
+    with (
+        capture_logs() as logs,
+        connect_as(fresh_database, WRITER_ROLE) as connection,
+        pytest.raises(StartupError),
+    ):
+        run_startup_sequence(connection, moved)
+
+    assert [entry["event"] for entry in logs] == [events.CATALOG_IDENTITY_VIOLATION]
+    assert [item["tank_id"] for item in logs[0]["tanks"]] == [1]
+    assert [item["sensor_id"] for item in logs[0]["temperature_sensors"]] == [1]
+
+
+def test_startup_sequence_fills_an_empty_leg(fresh_database: str) -> None:
+    migrate_as_owner(fresh_database)
+    silos = [silo(1)]
+    with connect_as(fresh_database, WRITER_ROLE) as connection:
+        run_startup_sequence(
+            connection,
+            acquisition_config(silos, temperature_sensors=[temperature_sensor(1, silo_id=1)]),
+        )
+        run_startup_sequence(
+            connection,
+            acquisition_config(
+                silos, temperature_sensors=[temperature_sensor(1, silo_id=1, leg=2)]
+            ),
+        )
+
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT silo_id, leg FROM dms.temperature_sensor") == [(1, 2)]
 
 
 def test_run_is_started_with_config_snapshot_and_stopped(
