@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import MeterRecord, WriterRecord
+from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
 from dms.logs import events
 from dms.persistence.record_store import DataStoreError, TransientStoreError, WriteResult
 from dms.persistence.writer import Writer
@@ -38,8 +38,11 @@ class FakeStore:
         if any(item in self.poison for item in records):
             raise DataStoreError("constraint violated")
         self.batches.append(list(records))
-        meter_total = sum(isinstance(item, MeterRecord) for item in records)
-        return WriteResult(meter_total - self.duplicates, meter_total)
+        readings_total = sum(
+            isinstance(item, MeterRecord | TemperatureRecord | UnknownSensorRecord)
+            for item in records
+        )
+        return WriteResult(readings_total - self.duplicates, readings_total)
 
     def close_rejected_event(self, event: ClosedEvent) -> bool:
         if self.failures:
@@ -247,6 +250,26 @@ def test_mixed_records_are_written_as_one_batch() -> None:
     writer.step()
 
     assert store.batches == [mixed]
+
+
+def test_skipped_temperature_readings_are_counted_with_meter_readings(
+    logs: list[MutableMapping[str, Any]],
+) -> None:
+    store = FakeStore(duplicates=2)
+    batch: list[WriterRecord] = [
+        record(1),
+        TemperatureRecord(sensor_id=1, wall_ns=1, value_c=21.5, error=None),
+        UnknownSensorRecord(address="28A8F126AB240B1C", wall_ns=1, value_c=None, error=None),
+    ]
+
+    writer, in_queue, _ = build(store)
+    for item in batch:
+        in_queue.put(item)
+
+    writer.step()
+
+    (skipped,) = [entry for entry in logs if entry["event"] == events.DB_READINGS_SKIPPED]
+    assert (skipped["skipped"], skipped["batch_size"]) == (2, 3)
 
 
 def test_skipped_readings_are_counted_without_events(

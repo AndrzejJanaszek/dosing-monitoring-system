@@ -2,6 +2,7 @@ import queue
 import threading
 from collections.abc import MutableMapping
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -22,7 +23,8 @@ from dms.config.models import (
     TemperatureSensorConfig,
 )
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import MeterRecord, WriterRecord
+from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.temperatures import TemperatureError
 from dms.logs import events
 from dms.persistence.catalog import (
     SyncResult,
@@ -468,8 +470,8 @@ def test_store_writes_and_ignores_duplicates(
     first = store.write(batch)
     second = store.write([*batch, MeterRecord(1, BASE_NS + 2_000_000_000, 140)])
 
-    assert (first.meter_inserted, second.meter_inserted) == (2, 1)
-    assert (first.meter_total, second.meter_total) == (2, 3)
+    assert (first.readings_inserted, second.readings_inserted) == (2, 1)
+    assert (first.readings_total, second.readings_total) == (2, 3)
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT silo_id, value_kg FROM dms.meter_reading ORDER BY t") == [
@@ -477,6 +479,98 @@ def test_store_writes_and_ignores_duplicates(
             (1, 120),
             (1, 140),
         ]
+
+
+UNKNOWN_ADDRESS = "28FF4A7C61160398"
+
+
+def temperature_store(
+    database_url: str, connection: psycopg.Connection[TupleRow]
+) -> PostgresRecordStore:
+    sync_temperature_sensors(connection, [temperature_sensor(1, silo_id=1, leg=1)])
+    return build_store(database_url, connection)
+
+
+def temperature_record(
+    wall_ns: int, value_c: float | None, error: TemperatureError | None = None
+) -> TemperatureRecord:
+    return TemperatureRecord(sensor_id=1, wall_ns=wall_ns, value_c=value_c, error=error)
+
+
+def test_store_writes_temperature_and_unknown_sensor_readings_idempotently(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = temperature_store(fresh_database, writer_connection)
+    batch: list[WriterRecord] = [
+        temperature_record(BASE_NS, 21.5),
+        temperature_record(BASE_NS + NS_PER_S, None, TemperatureError.READ_FAILED),
+        temperature_record(BASE_NS + 2 * NS_PER_S, 150.25, TemperatureError.OUT_OF_RANGE),
+        UnknownSensorRecord(address=UNKNOWN_ADDRESS, wall_ns=BASE_NS, value_c=19.0, error=None),
+    ]
+
+    first = store.write(batch)
+    second = store.write(batch)
+
+    assert (first.readings_inserted, first.readings_total) == (4, 4)
+    assert (second.readings_inserted, second.readings_total) == (0, 4)
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(
+            reader, "SELECT sensor_id, value_c, error FROM dms.temperature_reading ORDER BY t"
+        ) == [
+            (1, Decimal("21.50"), None),
+            (1, None, "read_failed"),
+            (1, Decimal("150.25"), "out_of_range"),
+        ]
+        assert rows(reader, "SELECT address, value_c, error FROM dms.unknown_sensor_reading") == [
+            (UNKNOWN_ADDRESS, Decimal("19.00"), None)
+        ]
+
+
+@pytest.mark.parametrize(
+    "violating",
+    [
+        pytest.param(
+            temperature_record(BASE_NS, 21.5, TemperatureError.READ_FAILED), id="error-with-value"
+        ),
+        pytest.param(temperature_record(BASE_NS, None), id="no-value-and-no-error"),
+        pytest.param(
+            temperature_record(BASE_NS, None, TemperatureError.OUT_OF_RANGE),
+            id="out-of-range-without-value",
+        ),
+    ],
+)
+def test_temperature_record_breaking_the_consistency_check_is_rejected_and_the_writer_goes_on(
+    fresh_database: str,
+    writer_connection: psycopg.Connection[TupleRow],
+    violating: TemperatureRecord,
+) -> None:
+    writer, in_queue = build_writer(temperature_store(fresh_database, writer_connection))
+    good = temperature_record(BASE_NS + NS_PER_S, 20.0)
+    for item in (violating, good):
+        in_queue.put(item)
+
+    with capture_logs() as logs:
+        writer.step()
+
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT value_c FROM dms.temperature_reading") == [(Decimal("20.00"),)]
+    (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
+    assert rejected["record_type"] == "TemperatureRecord"
+    assert rejected["record"]["sensor_id"] == 1
+
+
+def test_unknown_sensor_record_with_a_malformed_address_is_rejected(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    writer, in_queue = build_writer(temperature_store(fresh_database, writer_connection))
+    in_queue.put(UnknownSensorRecord(address="28a8", wall_ns=BASE_NS, value_c=1.0, error=None))
+
+    with capture_logs() as logs:
+        writer.step()
+
+    assert [entry["event"] for entry in logs] == [events.DB_RECORD_REJECTED]
+    with psycopg.connect(fresh_database) as reader:
+        assert rows(reader, "SELECT count(*) FROM dms.unknown_sensor_reading") == [(0,)]
 
 
 def test_startup_sequence_on_migrated_database(fresh_database: str) -> None:
@@ -760,7 +854,7 @@ def test_repeated_batch_is_idempotent(
     result = store.write(batch)
 
     assert event_rows(fresh_database) == [completed_row()]
-    assert result.meter_inserted == 0
+    assert result.readings_inserted == 0
 
 
 def test_incomplete_event_stores_both_qualities_and_empty_value(
