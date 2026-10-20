@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 
 from dms.acquisition import app as app_module
-from dms.acquisition.app import AcquisitionApp, build_silos
+from dms.acquisition.app import AcquisitionApp, build_silos, build_temperature_sensors
 from dms.acquisition.engine import Engine
 from dms.acquisition.ticker import TickTimer
 from dms.config.models import (
@@ -16,9 +16,12 @@ from dms.config.models import (
     MeterConfig,
     MeterFormat,
     SiloConfig,
+    TemperaturesConfig,
+    TemperatureSensorConfig,
 )
+from dms.domain.temperature_error import TemperatureError
 from dms.logs import events
-from dms.messages import MeterReading, Tick
+from dms.messages import MeterReading, TemperatureEntry, TemperatureReadings, Tick
 from dms.persistence.record_store import PostgresRecordStore
 from dms.persistence.writer import Writer
 from dms.units import NS_PER_S
@@ -151,3 +154,53 @@ def test_build_silos_assigns_each_silo_its_own_tanks_and_config_ages() -> None:
     assert silos["m1"].on_tick(Tick(0, 12 * NS_PER_S)) != []
     assert silos["m1"].on_tick(Tick(0, 12 * NS_PER_S + 1)) == []
     assert silos["m1"].signals_stale_since_mono_ns == 200 + round(0.5 * NS_PER_S)
+
+
+def temperature_config(*, with_board: bool) -> AcquisitionConfig:
+    return AcquisitionConfig(
+        engine=EngineConfig(tick_interval_s=2.0),
+        temperatures=TemperaturesConfig(
+            record_interval_s=10.0, max_reading_age_s=3.0, min_valid_c=-10.0, max_valid_c=50.0
+        ),
+        meters=(),
+        silos=(),
+        board=BoardConfig(
+            id="board",
+            port="/dev/board",
+            baudrate=9600,
+            frame_end="\r\n",
+            reconnect_delay_s=5.0,
+            silence_timeout_s=5.0,
+        )
+        if with_board
+        else None,
+        temperature_sensors=(
+            TemperatureSensorConfig(id=4, name="Czujnik 4", address="28A8F126AB240B1C"),
+        ),
+    )
+
+
+def test_board_without_temperature_sensors_still_builds_temperature_tracking() -> None:
+    config = temperature_config(with_board=True).model_copy(update={"temperature_sensors": ()})
+
+    assert build_temperature_sensors(config, started_mono_ns=0) is not None
+
+
+def test_no_temperature_tracking_without_a_board() -> None:
+    assert (
+        build_temperature_sensors(temperature_config(with_board=False), started_mono_ns=0) is None
+    )
+
+
+def test_temperature_tracking_follows_the_configured_settings() -> None:
+    sensors = build_temperature_sensors(temperature_config(with_board=True), started_mono_ns=0)
+    assert sensors is not None
+    sensors.on_readings(
+        TemperatureReadings((TemperatureEntry("28A8F126AB240B1C", 60.0, None),), 1, 1 * NS_PER_S)
+    )
+
+    first = sensors.on_tick(Tick(2, 2 * NS_PER_S))
+    stale = sensors.on_tick(Tick(5, 5 * NS_PER_S))
+
+    assert [getattr(item, "error", None) for item in first] == [TemperatureError.OUT_OF_RANGE]
+    assert [type(item).__name__ for item in stale] == ["SensorStale"]

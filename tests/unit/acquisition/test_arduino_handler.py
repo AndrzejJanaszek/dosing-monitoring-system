@@ -8,7 +8,13 @@ from dms.acquisition.arduino.handler import ArduinoFrameHandler
 from dms.acquisition.arduino.mapping import SignalMapper
 from dms.acquisition.serial.adapter import FrameOutcome
 from dms.logs import events
-from dms.messages import EngineMessage, SignalStates, TankSignals
+from dms.messages import (
+    EngineMessage,
+    SignalStates,
+    TankSignals,
+    TemperatureEntry,
+    TemperatureReadings,
+)
 from tests.unit.acquisition.builders import tank_config
 
 ALL_PINS = b'{"pins":{"4":0,"5":1,"6":1,"7":1}}'
@@ -43,10 +49,39 @@ def test_complete_pins_frame_publishes_signal_states_with_given_stamps() -> None
     )
 
 
-def test_temperatures_frame_is_accepted_without_publishing() -> None:
+def test_temperatures_frame_publishes_entries_with_given_stamps() -> None:
+    handler, messages = build()
+    frame = (
+        b'{"temps":[{"a":"28A8F126AB240B1C","t":21.5},'
+        b'{"a":"28FF4A7C61160398","t":null,"e":"read_failed"}]}'
+    )
+
+    outcome = handler.handle(frame, 11, 22)
+
+    assert outcome is FrameOutcome.ACCEPTED
+    assert messages.get_nowait() == TemperatureReadings(
+        (
+            TemperatureEntry("28A8F126AB240B1C", 21.5, None),
+            TemperatureEntry("28FF4A7C61160398", None, "read_failed"),
+        ),
+        11,
+        22,
+    )
+
+
+def test_empty_temperatures_frame_publishes_empty_readings() -> None:
     handler, messages = build()
 
-    assert handler.handle(b'{"temps":[]}', 0, 0) is FrameOutcome.ACCEPTED
+    assert handler.handle(b'{"temps":[]}', 5, 6) is FrameOutcome.ACCEPTED
+    assert messages.get_nowait() == TemperatureReadings((), 5, 6)
+
+
+def test_malformed_temperatures_frame_is_rejected_without_publishing() -> None:
+    handler, messages = build()
+
+    outcome = handler.handle(b'{"temps":[{"a":"x","t":1.0}]}', 0, 0)
+
+    assert outcome is FrameOutcome.REJECTED
     assert messages.empty()
 
 
