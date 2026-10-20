@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 from enum import StrEnum
 from typing import Literal
@@ -23,6 +24,8 @@ MAX_TANKS_PER_SILO = 2
 MIN_PIN_LEVEL = 0
 MAX_PIN_LEVEL = 1
 PIN_LEVELS = (MIN_PIN_LEVEL, MAX_PIN_LEVEL)
+MIN_LEG = 1
+SENSOR_ADDRESS_PATTERN = re.compile(r"^[0-9A-F]{16}$")
 
 type BaudRate = Literal[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
 
@@ -95,12 +98,21 @@ class SiloConfig(FrozenModel):
     meter_id: str = Field(min_length=NON_EMPTY)
 
 
+class TemperatureSensorConfig(FrozenModel):
+    id: int = Field(ge=NON_EMPTY, le=MAX_SMALLINT)
+    name: str = Field(min_length=NON_EMPTY)
+    address: str = Field(pattern=SENSOR_ADDRESS_PATTERN.pattern)
+    silo_id: int | None = Field(default=None, ge=NON_EMPTY, le=MAX_SMALLINT)
+    leg: int | None = Field(default=None, ge=MIN_LEG, le=MAX_SMALLINT)
+
+
 class AcquisitionConfig(FrozenModel):
     engine: EngineConfig = EngineConfig()
     meters: tuple[MeterConfig, ...]
     silos: tuple[SiloConfig, ...]
     board: BoardConfig | None = None
     tanks: tuple[TankConfig, ...] = ()
+    temperature_sensors: tuple[TemperatureSensorConfig, ...] = ()
 
 
 def validate_acquisition_rules(config: AcquisitionConfig) -> list[str]:
@@ -110,6 +122,7 @@ def validate_acquisition_rules(config: AcquisitionConfig) -> list[str]:
     errors.extend(_duplicates("silos", "id", [silo.id for silo in config.silos]))
     errors.extend(_silo_errors(config))
     errors.extend(_tank_errors(config))
+    errors.extend(_temperature_sensor_errors(config))
     return errors
 
 
@@ -171,6 +184,27 @@ def _tank_errors(config: AcquisitionConfig) -> list[str]:
                 )
             else:
                 pin_owners[input_config.pin] = f"tanks[{index}].{signal}"
+    return errors
+
+
+def _temperature_sensor_errors(config: AcquisitionConfig) -> list[str]:
+    errors = _duplicates(
+        "temperature_sensors", "id", [item.id for item in config.temperature_sensors]
+    )
+    errors.extend(
+        _duplicates(
+            "temperature_sensors", "address", [item.address for item in config.temperature_sensors]
+        )
+    )
+    if config.temperature_sensors and config.board is None:
+        errors.append("temperature_sensors: temperature sensors require a [board] section")
+
+    silo_ids = {silo.id for silo in config.silos}
+    for index, sensor in enumerate(config.temperature_sensors):
+        if sensor.silo_id is not None and sensor.silo_id not in silo_ids:
+            errors.append(f"temperature_sensors[{index}].silo_id: unknown silo {sensor.silo_id}")
+        if sensor.leg is not None and sensor.silo_id is None:
+            errors.append(f"temperature_sensors[{index}].leg: leg requires a silo_id")
     return errors
 
 

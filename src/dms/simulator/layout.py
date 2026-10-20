@@ -1,4 +1,3 @@
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -6,6 +5,7 @@ from dms.config.models import (
     MAX_SMALLINT,
     MAX_TANKS_PER_SILO,
     PIN_LEVELS,
+    SENSOR_ADDRESS_PATTERN,
     BaudRate,
     MeterFormat,
 )
@@ -25,7 +25,6 @@ MIN_DEVICE_PERIOD_S = 0.001
 MAX_METER_RATE_HZ = 1 / MIN_DEVICE_PERIOD_S
 MIN_ID = 1
 MIN_TANKS_PER_SILO = 1
-SENSOR_ADDRESS_PATTERN = re.compile(r"^[0-9A-F]{16}$")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
