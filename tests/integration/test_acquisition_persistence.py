@@ -11,6 +11,7 @@ import pytest
 from psycopg.rows import TupleRow
 from structlog.testing import capture_logs
 
+from dms.acquisition import startup
 from dms.acquisition.startup import StartupError, run_startup_sequence
 from dms.config.models import (
     AcquisitionConfig,
@@ -23,6 +24,7 @@ from dms.config.models import (
     TemperatureSensorConfig,
 )
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
+from dms.domain.rate_history import DEFAULT_RATE_HISTORY_CAPACITY, RateSample, rate_sample_of
 from dms.domain.records import (
     EventRecord,
     MeterRecord,
@@ -45,11 +47,13 @@ from dms.persistence.catalog import (
     temperature_sensor_identity_violations,
 )
 from dms.persistence.connection import DatabaseUnreachableError, connect_with_retry
+from dms.persistence.rate_history import load_rate_samples
 from dms.persistence.record_store import DataStoreError, PostgresRecordStore, timestamp_from_ns
 from dms.persistence.writer import Writer
 from dms.units import NS_PER_S
 from tests.database import connect_as, migrate_as_owner
 from tests.fakes import ManualClock
+from tests.rate_history_cases import RATE_CASES, case_record
 
 WRITER_ROLE = "dms_writer"
 BASE_NS = 1_700_000_000_123_456_000
@@ -358,7 +362,7 @@ def test_startup_sequence_stores_temperature_sensors_and_their_addresses(
     config = acquisition_config([silo(1)], temperature_sensors=sensors)
 
     with capture_logs() as logs, connect_as(fresh_database, WRITER_ROLE) as connection:
-        run_id = run_startup_sequence(connection, config)
+        run_id = run_startup_sequence(connection, config).run_id
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(
@@ -584,7 +588,7 @@ def test_startup_sequence_on_migrated_database(fresh_database: str) -> None:
     config = acquisition_config([silo(1), silo(2)])
 
     with connect_as(fresh_database, WRITER_ROLE) as connection:
-        run_id = run_startup_sequence(connection, config)
+        run_id = run_startup_sequence(connection, config).run_id
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT id FROM dms.silo ORDER BY id") == [(1,), (2,)]
@@ -597,7 +601,7 @@ def test_startup_sequence_stores_tanks_and_board_snapshot(fresh_database: str) -
     config = acquisition_config([silo(1)], [tank(1), tank(2)])
 
     with capture_logs() as logs, connect_as(fresh_database, WRITER_ROLE) as connection:
-        run_id = run_startup_sequence(connection, config)
+        run_id = run_startup_sequence(connection, config).run_id
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT id, silo_id, name, active FROM dms.tank ORDER BY id") == [
@@ -1051,7 +1055,7 @@ def crashed_run(
 
 
 def restart(connection: psycopg.Connection[TupleRow]) -> int:
-    return run_startup_sequence(connection, acquisition_config([silo(1)], [tank(1)]))
+    return run_startup_sequence(connection, acquisition_config([silo(1)], [tank(1)])).run_id
 
 
 def test_restart_closes_event_in_progress_at_the_last_reading_before_the_new_run(
@@ -1287,3 +1291,101 @@ def test_rejected_event_end_does_not_touch_a_row_that_is_not_in_progress(
     writer.step()
 
     assert event_rows(fresh_database) == before
+
+
+def test_loaded_rate_samples_match_the_domain_criteria_for_the_same_cases(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    store.write([case.record for case in RATE_CASES])
+
+    loaded = load_rate_samples(writer_connection, [1], capacity=len(RATE_CASES))
+
+    expected = [
+        sample
+        for case in RATE_CASES
+        if isinstance(sample := rate_sample_of(case.record), RateSample)
+    ]
+    assert loaded == {1: expected}
+    assert len(expected) == 2
+
+
+def test_rate_history_skips_events_with_unknown_flags(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    writer_connection.execute(
+        "INSERT INTO dms.tank_event (id, tank_id, run_id, type, origin, status, start_at,"
+        " start_value_kg, start_quality, end_at, end_value_kg, end_quality, duration_ms)"
+        " VALUES (%s, 1, 1, 'dispense', 'signal', 'completed', %s, 1000, 'fresh', %s, 400,"
+        " 'fresh', 12000)",
+        [UUID(int=50), timestamp_from_ns(BASE_NS), timestamp_from_ns(BASE_NS + 12 * NS_PER_S)],
+    )
+    store.write([started(UUID(int=51)), case_record(52)])
+
+    assert load_rate_samples(writer_connection, [1], capacity=10) == {
+        1: [rate_sample_of_clean(case_record(52))]
+    }
+
+
+def rate_sample_of_clean(record: EventRecord) -> RateSample:
+    sample = rate_sample_of(record)
+    assert isinstance(sample, RateSample)
+    return sample
+
+
+def test_rate_history_holds_the_latest_samples_of_each_tank_oldest_first(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    sync_tanks(writer_connection, [tank(1), tank(2), tank(3)])
+    tank_one = [case_record(number) for number in (11, 14, 12, 13)]
+    store.write([*tank_one, case_record(20, tank_id=2)])
+
+    loaded = load_rate_samples(writer_connection, [1, 2, 3], capacity=3)
+
+    assert loaded == {
+        1: [rate_sample_of_clean(case_record(number)) for number in (12, 13, 14)],
+        2: [rate_sample_of_clean(case_record(20, tank_id=2))],
+        3: [],
+    }
+
+
+def test_startup_loads_the_rate_history_and_reports_short_ones(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    store.write([case_record(number) for number in range(30, 30 + DEFAULT_RATE_HISTORY_CAPACITY)])
+    config = acquisition_config([silo(1)], [tank(1), tank(2)])
+
+    with capture_logs() as logs:
+        started_run = run_startup_sequence(writer_connection, config)
+
+    assert [len(samples) for samples in started_run.rate_samples.values()] == [
+        DEFAULT_RATE_HISTORY_CAPACITY,
+        0,
+    ]
+    (loaded,) = [entry for entry in logs if entry["event"] == events.RATE_HISTORY_LOADED]
+    assert loaded["tanks"] == [
+        {"tank_id": 1, "samples": DEFAULT_RATE_HISTORY_CAPACITY},
+        {"tank_id": 2, "samples": 0},
+    ]
+    (short,) = [entry for entry in logs if entry["event"] == events.RATE_HISTORY_SHORT]
+    assert (short["log_level"], short["tank_ids"]) == ("warning", [2])
+
+
+def test_failed_rate_history_load_refuses_startup_without_starting_a_run(
+    writer_connection: psycopg.Connection[TupleRow], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_load(*_arguments: object) -> dict[int, list[RateSample]]:
+        raise psycopg.OperationalError("connection lost")
+
+    monkeypatch.setattr(startup, "load_rate_samples", failing_load)
+
+    with capture_logs() as logs, pytest.raises(StartupError):
+        run_startup_sequence(writer_connection, acquisition_config([silo(1)], [tank(1)]))
+
+    assert [(entry["event"], entry["step"]) for entry in logs] == [
+        (events.DB_STARTUP_FAILED, "rate_history")
+    ]
+    assert rows(writer_connection, "SELECT count(*) FROM dms.run") == [(0,)]

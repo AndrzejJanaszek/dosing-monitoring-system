@@ -45,7 +45,11 @@ def run_pipeline(
         in_queue=queue.Queue(),
         out_queue=writer_queue,
         silos_by_meter=build_silos(
-            config, new_event_id=counting_ids(), started_wall_ns=0, started_mono_ns=0
+            config,
+            new_event_id=counting_ids(),
+            started_wall_ns=0,
+            started_mono_ns=0,
+            rate_samples={},
         ),
         stop_event=threading.Event(),
     )

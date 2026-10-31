@@ -27,6 +27,7 @@ from dms.config.models import (
     MeterFormat,
     TankConfig,
 )
+from dms.domain.rate_history import DEFAULT_RATE_HISTORY_CAPACITY, RateSample
 from dms.domain.records import WriterRecord
 from dms.domain.silo import Silo
 from dms.domain.temperatures import TemperatureSensors
@@ -136,6 +137,7 @@ def build_silos(
     new_event_id: Callable[[], uuid.UUID],
     started_wall_ns: int,
     started_mono_ns: int,
+    rate_samples: Mapping[int, Sequence[RateSample]],
 ) -> dict[str, Silo]:
     return {
         silo.meter_id: Silo(
@@ -147,6 +149,8 @@ def build_silos(
             new_event_id=new_event_id,
             started_wall_ns=started_wall_ns,
             started_mono_ns=started_mono_ns,
+            rate_samples=rate_samples,
+            rate_history_capacity=DEFAULT_RATE_HISTORY_CAPACITY,
         )
         for silo in config.silos
     }
@@ -249,6 +253,7 @@ def build_acquisition(
     connection: psycopg.Connection[TupleRow],
     reconnect: Callable[[], psycopg.Connection[TupleRow]],
     run_id: int,
+    rate_samples: Mapping[int, Sequence[RateSample]],
 ) -> AcquisitionApp:
     engine_queue: queue.Queue[EngineMessage] = queue.Queue()
     record_queue: queue.Queue[WriterRecord] = queue.Queue()
@@ -276,6 +281,7 @@ def build_acquisition(
         new_event_id=uuid.uuid7,
         started_wall_ns=clock.wall_ns(),
         started_mono_ns=clock.mono_ns(),
+        rate_samples=rate_samples,
     )
     store = PostgresRecordStore(connection, reconnect, run_id)
     return AcquisitionApp(

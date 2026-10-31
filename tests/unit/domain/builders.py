@@ -1,7 +1,8 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from itertools import count
 from uuid import UUID
 
+from dms.domain.rate_history import RateSample
 from dms.domain.silo import Silo
 from dms.domain.temperatures import TemperatureSensors
 from dms.messages import TemperatureEntry, TemperatureReadings
@@ -14,6 +15,7 @@ SENSOR_ADDRESS = "28A8F126AB240B1C"
 SENSOR_ID = 3
 OTHER_ADDRESS = "28FF4A7C61160398"
 WALL_OFFSET_NS = 1_000
+RATE_HISTORY_CAPACITY = 3
 
 
 def sequential_ids() -> Callable[[], UUID]:
@@ -30,6 +32,8 @@ def build_silo(
     started_wall_ns: int = 0,
     started_mono_ns: int = 0,
     new_event_id: Callable[[], UUID] | None = None,
+    rate_samples: Mapping[int, Sequence[RateSample]] | None = None,
+    rate_history_capacity: int = RATE_HISTORY_CAPACITY,
 ) -> Silo:
     return Silo(
         silo_id,
@@ -40,6 +44,8 @@ def build_silo(
         new_event_id=new_event_id if new_event_id is not None else sequential_ids(),
         started_wall_ns=started_wall_ns,
         started_mono_ns=started_mono_ns,
+        rate_samples=rate_samples if rate_samples is not None else {},
+        rate_history_capacity=rate_history_capacity,
     )
 
 

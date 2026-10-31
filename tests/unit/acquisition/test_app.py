@@ -144,7 +144,11 @@ def test_build_silos_assigns_each_silo_its_own_tanks_and_config_ages() -> None:
     )
 
     silos = build_silos(
-        config, new_event_id=lambda: UUID(int=1), started_wall_ns=100, started_mono_ns=200
+        config,
+        new_event_id=lambda: UUID(int=1),
+        started_wall_ns=100,
+        started_mono_ns=200,
+        rate_samples={},
     )
 
     assert {meter_id: silo.silo_id for meter_id, silo in silos.items()} == {"m1": 1, "m2": 2}
