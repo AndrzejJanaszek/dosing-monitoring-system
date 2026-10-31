@@ -7,6 +7,7 @@ from dms.simulator.catalog import (
     ONE_TANK,
     ONE_TANK_ACTIVE_HIGH,
     ONE_TANK_WITH_SENSORS,
+    RELATION_OFFSET_S,
     SCENARIOS,
     TWO_SILOS,
     TWO_TANKS,
@@ -57,17 +58,32 @@ def allen_relation(dispense: Dispense, refill: Refill) -> str:
     return OVERLAPPING_RELATIONS[start_order, end_order]
 
 
-def relation_of(scenario: Scenario) -> tuple[str, ...]:
-    refill = next(event for event in scenario.events if isinstance(event, Refill))
-    dispenses = sorted(
-        (event for event in scenario.events if isinstance(event, Dispense)),
+def relation_dispenses(scenario: Scenario) -> list[Dispense]:
+    return sorted(
+        (
+            event
+            for event in scenario.events
+            if isinstance(event, Dispense) and event.start_s >= RELATION_OFFSET_S
+        ),
         key=lambda event: event.start_s,
     )
-    return tuple(allen_relation(dispense, refill) for dispense in dispenses)
+
+
+def run_up_tanks(scenario: Scenario) -> list[int]:
+    return [
+        event.tank_id
+        for event in scenario.events
+        if isinstance(event, Dispense) and event.end_s < RELATION_OFFSET_S
+    ]
+
+
+def relation_of(scenario: Scenario) -> tuple[str, ...]:
+    refill = next(event for event in scenario.events if isinstance(event, Refill))
+    return tuple(allen_relation(dispense, refill) for dispense in relation_dispenses(scenario))
 
 
 def test_catalog_has_expected_size() -> None:
-    assert len(SCENARIOS) == 42
+    assert len(SCENARIOS) == 43
 
 
 @pytest.mark.parametrize("name", EXPECTED_RELATIONS)
@@ -76,6 +92,7 @@ def test_relations_on_one_tank(name: str) -> None:
 
     assert relation_of(scenario) == EXPECTED_RELATIONS[name]
     assert {event.tank_id for event in scenario.events} == {1}
+    assert run_up_tanks(scenario) == [1, 1, 1]
     assert scenario.layout is ONE_TANK
 
 
@@ -84,9 +101,22 @@ def test_relations_on_two_tanks_of_one_silo(name: str) -> None:
     scenario = SCENARIOS[f"{name}{OTHER_TANK_SUFFIX}"]
 
     assert relation_of(scenario) == EXPECTED_RELATIONS[name]
-    assert {event.tank_id for event in scenario.events if isinstance(event, Dispense)} == {1}
+    assert {event.tank_id for event in relation_dispenses(scenario)} == {1}
     assert {event.tank_id for event in scenario.events if isinstance(event, Refill)} == {2}
+    assert run_up_tanks(scenario) == [1, 1, 1, 2, 2, 2]
     assert scenario.layout is TWO_TANKS
+
+
+def test_tanks_of_two_tank_relations_dispense_at_different_rates() -> None:
+    scenario = SCENARIOS["dispense-inner-refill-other-tank"]
+
+    rates = {
+        event.tank_id: event.mass_kg / (event.end_s - event.start_s)
+        for event in scenario.events
+        if isinstance(event, Dispense)
+    }
+
+    assert rates[1] != rates[2]
 
 
 @pytest.mark.parametrize(

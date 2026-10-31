@@ -9,6 +9,14 @@ max_reading_age_s = 5.0
 min_valid_c = -40.0
 max_valid_c = 80.0
 
+# Estimation methods give every event that collided with another event of its silo a theoretical
+# value, stored in dms.event_estimate. mean_rate: the mean dispense rate of the last n clean
+# dispenses of the tank (default n = 10). The example uses n = 3, so that short simulator
+# scenarios already give values.
+[[estimation_methods]]
+method = "mean_rate"
+n = 3
+
 [[meters]]
 id = "meter-1"
 port = "/tmp/dms/meter-1"

@@ -19,6 +19,11 @@ from dms.simulator.scenario_model import Dispense, Refill, SimulatedTankEvent
 
 DISPENSE_DURATION_S = 30.0
 DISPENSE_MASS_KG = 1_500
+OTHER_TANK_DISPENSE_MASS_KG = 900
+RUN_UP_DISPENSES = 3
+RUN_UP_START_S = 10.0
+RUN_UP_GAP_S = 10.0
+RELATION_OFFSET_S = 250.0
 REFILL_DURATION_S = 300.0
 REFILL_MASS_KG = 6_000
 OTHER_TANK_SUFFIX = "-other-tank"
@@ -71,13 +76,23 @@ class Relation:
     dispense_starts_s: tuple[float, ...]
 
 
-def _dispense(tank_id: int, start_s: float) -> Dispense:
+def _dispense(tank_id: int, start_s: float, mass_kg: int = DISPENSE_MASS_KG) -> Dispense:
     return Dispense(
         tank_id=tank_id,
         start_s=start_s,
         end_s=start_s + DISPENSE_DURATION_S,
-        mass_kg=DISPENSE_MASS_KG,
+        mass_kg=mass_kg,
     )
+
+
+def _run_up(*masses_by_tank: tuple[int, int]) -> list[Dispense]:
+    run_up: list[Dispense] = []
+    start_s = RUN_UP_START_S
+    for tank_id, mass_kg in masses_by_tank:
+        for _ in range(RUN_UP_DISPENSES):
+            run_up.append(_dispense(tank_id, start_s, mass_kg))
+            start_s += DISPENSE_DURATION_S + RUN_UP_GAP_S
+    return run_up
 
 
 def _refill(tank_id: int, start_s: float) -> Refill:
@@ -126,12 +141,20 @@ RELATIONS = (
 def dispense_refill_relations(
     layout: PlantLayout, dispense_tank: int, refill_tank: int, suffix: str
 ) -> list[Scenario]:
+    masses_by_tank = [(dispense_tank, DISPENSE_MASS_KG)]
+    if refill_tank != dispense_tank:
+        masses_by_tank.append((refill_tank, OTHER_TANK_DISPENSE_MASS_KG))
+    run_up = _run_up(*masses_by_tank)
     return [
         _scenario(
             f"{relation.name}{suffix}",
             layout,
-            _refill(refill_tank, relation.refill_start_s),
-            *(_dispense(dispense_tank, start_s) for start_s in relation.dispense_starts_s),
+            *run_up,
+            _refill(refill_tank, RELATION_OFFSET_S + relation.refill_start_s),
+            *(
+                _dispense(dispense_tank, RELATION_OFFSET_S + start_s)
+                for start_s in relation.dispense_starts_s
+            ),
         )
         for relation in RELATIONS
     ]
@@ -175,6 +198,15 @@ def _two_tank_series() -> list[Scenario]:
             _dispense(1, 50),
             _dispense(2, 120),
             _dispense(1, 190),
+        ),
+        _scenario(
+            "refill-with-dispenses-both-tanks-after-run-up",
+            TWO_TANKS,
+            *_run_up((1, DISPENSE_MASS_KG), (2, OTHER_TANK_DISPENSE_MASS_KG)),
+            _refill(1, RELATION_OFFSET_S + 10),
+            _dispense(1, RELATION_OFFSET_S + 50),
+            _dispense(2, RELATION_OFFSET_S + 120, OTHER_TANK_DISPENSE_MASS_KG),
+            _dispense(1, RELATION_OFFSET_S + 190),
         ),
     ]
 
