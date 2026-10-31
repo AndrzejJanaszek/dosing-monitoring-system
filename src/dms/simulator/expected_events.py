@@ -1,8 +1,9 @@
+import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from dms.domain.events import EndQuality, EventKind, StartQuality
-from dms.simulator.layout import Input
+from dms.simulator.layout import Input, PlantLayout
 from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import MeterSample, PinsSample, Sample
 
@@ -17,6 +18,8 @@ class ExpectedEvent:
     end_value_kg: int | None
     start_quality: StartQuality
     end_quality: EndQuality
+    collision: bool
+    rule_violation: bool
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -63,7 +66,28 @@ def expected_events(
                             )
                         )
             first_pins_sample = False
-    return expected
+    return _with_flags(scenario.layout, expected)
+
+
+def _with_flags(layout: PlantLayout, events: list[ExpectedEvent]) -> list[ExpectedEvent]:
+    flagged: list[ExpectedEvent] = []
+    for event in events:
+        overlapping = [
+            other
+            for other in events
+            if other is not event
+            and layout.silo_of(other.tank_id).id == layout.silo_of(event.tank_id).id
+            and other.start_ns < event.end_ns
+            and event.start_ns < other.end_ns
+        ]
+        flagged.append(
+            dataclasses.replace(
+                event,
+                collision=bool(overlapping),
+                rule_violation=any(other.kind is event.kind for other in overlapping),
+            )
+        )
+    return flagged
 
 
 def _wirings(dispense: Input, refill: Input) -> tuple[tuple[EventKind, Input], ...]:
@@ -123,6 +147,8 @@ def _step(
                 end_value_kg=value_kg,
                 start_quality=opened.start_quality,
                 end_quality=_end_quality(value_kg),
+                collision=False,
+                rule_violation=False,
             )
         ]
     return []
