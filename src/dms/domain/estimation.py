@@ -48,7 +48,7 @@ class MeanRateMethod:
             data_reason = _dispense_data_reason(event)
             needed_tanks = [event.tank_id]
         else:
-            data_reason = _refill_data_reason(event, overlaps)
+            data_reason = _refill_data_reason(event)
             needed_tanks = [overlap.partner_tank_id for overlap in overlaps]
         if data_reason is not None:
             return data_reason
@@ -99,9 +99,7 @@ def _dispense_data_reason(event: ClosedEvent) -> MissingReason | None:
     return None
 
 
-def _refill_data_reason(event: ClosedEvent, overlaps: Sequence[Overlap]) -> MissingReason | None:
+def _refill_data_reason(event: ClosedEvent) -> MissingReason | None:
     if event.start_value_kg is None or event.end_value_kg is None:
         return MissingReason.UNMEASURED_CHANGE
-    if any(not overlap.partner_start_known or not overlap.end_known for overlap in overlaps):
-        return MissingReason.UNKNOWN_OVERLAP
     return None

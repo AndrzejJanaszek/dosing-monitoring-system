@@ -271,7 +271,9 @@ def test_rule_violation_is_logged_when_it_starts_and_on_both_closed_events() -> 
         in_queue=queue.Queue(),
         out_queue=out_queue,
         silos_by_meter={
-            "m1": build_silo(1, tank_ids=(1, 2), estimation_methods=[MeanRateMethod(3)])
+            "m1": build_silo(
+                1, tank_ids=(1, 2), estimation_methods=[MeanRateMethod(3), MeanRateMethod(5)]
+            )
         },
         stop_event=threading.Event(),
     )
@@ -303,10 +305,11 @@ def test_rule_violation_is_logged_when_it_starts_and_on_both_closed_events() -> 
         (True, True),
         (True, True),
     ]
-    assert [entry["estimates"] for entry in closed] == [
-        [{"method": "mean_rate", "missing_reason": "rule_violation"}],
-        [{"method": "mean_rate", "missing_reason": "rule_violation"}],
+    by_method = [
+        {"method": "mean_rate", "params": {"n": 3}, "missing_reason": "rule_violation"},
+        {"method": "mean_rate", "params": {"n": 5}, "missing_reason": "rule_violation"},
     ]
+    assert [entry["estimates"] for entry in closed] == [by_method, by_method]
     assert all(isinstance(item, StartedEvent | EventRecord) for item in records(out_queue))
 
 

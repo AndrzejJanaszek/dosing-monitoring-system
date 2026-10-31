@@ -229,6 +229,7 @@ class Engine:
 
 
 def _estimate_fields(estimate: EventEstimate) -> dict[str, object]:
+    fields: dict[str, object] = {"method": estimate.method, "params": dict(estimate.params)}
     if estimate.value_kg is None:
-        return {"method": estimate.method, "missing_reason": estimate.missing_reason}
-    return {"method": estimate.method, "value_kg": estimate.value_kg}
+        return {**fields, "missing_reason": estimate.missing_reason}
+    return {**fields, "value_kg": estimate.value_kg}

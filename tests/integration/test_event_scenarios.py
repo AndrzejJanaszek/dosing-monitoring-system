@@ -1,7 +1,7 @@
 import itertools
 import queue
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from uuid import UUID
 
@@ -13,6 +13,7 @@ from dms.acquisition.serial.adapter import FrameHandler
 from dms.acquisition.serial.framing import Framer
 from dms.domain.estimates import MissingReason
 from dms.domain.events import EndQuality, EventKind, StartedEvent, StartQuality
+from dms.domain.rate_history import RateSample, rate_sample_of
 from dms.domain.records import EventRecord, WriterRecord
 from dms.messages import EngineMessage, Tick
 from dms.simulator.catalog import OTHER_TANK_SUFFIX, RELATION_OFFSET_S, RELATIONS, SCENARIOS
@@ -37,7 +38,10 @@ def counting_ids() -> Callable[[], UUID]:
 
 
 def run_pipeline(
-    scenario: Scenario, samples: Iterable[Sample], tmp_path: Path
+    scenario: Scenario,
+    samples: Iterable[Sample],
+    tmp_path: Path,
+    rate_samples: Mapping[int, Sequence[RateSample]] | None = None,
 ) -> list[WriterRecord]:
     config = acquisition_config(scenario.layout, tmp_path)
     assert config.board is not None
@@ -51,7 +55,7 @@ def run_pipeline(
             new_event_id=counting_ids(),
             started_wall_ns=0,
             started_mono_ns=0,
-            rate_samples={},
+            rate_samples=rate_samples or {},
         ),
         stop_event=threading.Event(),
     )
@@ -90,6 +94,15 @@ def run_pipeline(
 
 def closed_events(records: list[WriterRecord]) -> list[EventRecord]:
     return [record for record in records if isinstance(record, EventRecord)]
+
+
+def rate_samples_of(records: list[WriterRecord]) -> dict[int, list[RateSample]]:
+    samples: dict[int, list[RateSample]] = {}
+    for record in closed_events(records):
+        sample = rate_sample_of(record)
+        if isinstance(sample, RateSample):
+            samples.setdefault(record.event.tank_id, []).append(sample)
+    return samples
 
 
 def as_expected(record: EventRecord) -> ExpectedEvent:
@@ -274,7 +287,7 @@ def test_refill_with_concurrent_dispenses_collides_without_its_own_rule_violatio
     assert all(event.collision for event in events)
 
 
-def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
+def test_refill_over_a_dispense_with_an_unknown_start_is_estimated_after_a_restart(
     tmp_path: Path,
 ) -> None:
     scenario = SCENARIOS["dispense-front-refill"]
@@ -283,6 +296,11 @@ def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
         key=lambda event: event.start_ns,
     )
     offset_ns = relation_dispense.start_ns + 5 * NS_PER_S
+    run_up_records = run_pipeline(
+        scenario,
+        itertools.takewhile(lambda sample: sample.at_ns < offset_ns, scenario_samples(scenario)),
+        tmp_path,
+    )
     samples = list(
         itertools.takewhile(
             lambda sample: sample.at_ns <= scenario.duration_ns - offset_ns,
@@ -290,7 +308,7 @@ def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
         )
     )
 
-    records = run_pipeline(scenario, samples, tmp_path)
+    records = run_pipeline(scenario, samples, tmp_path, rate_samples_of(run_up_records))
 
     dispense, refill = system_events(records)
     assert system_events(records) == oracle_events(scenario, samples)
@@ -304,10 +322,23 @@ def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
         StartQuality.FRESH,
         True,
     )
-    assert estimates_by_kind(records) == [
-        (EventKind.DISPENSE, MissingReason.UNKNOWN_DURATION),
-        (EventKind.REFILL, MissingReason.UNKNOWN_OVERLAP),
-    ]
+    dispense_record, refill_record = sorted(
+        closed_events(records), key=lambda record: record.event.kind
+    )
+    (dispense_estimate,) = dispense_record.estimates
+    assert dispense_estimate.missing_reason is MissingReason.UNKNOWN_DURATION
+    uninterrupted = oracle_events(scenario, list(scenario_samples(scenario)))
+    wanted = next(
+        estimate
+        for event, estimate in expected_estimates(
+            scenario, uninterrupted, n=SCENARIO_MEAN_RATE_N
+        ).items()
+        if event.kind is EventKind.REFILL
+    )
+    (refill_estimate,) = refill_record.estimates
+    assert wanted.true_kg is not None
+    assert refill_estimate.value_kg is not None
+    assert abs(refill_estimate.value_kg - wanted.true_kg) <= wanted.tolerance_kg
 
 
 @pytest.mark.parametrize(

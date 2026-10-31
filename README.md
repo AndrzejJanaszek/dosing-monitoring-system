@@ -223,7 +223,7 @@ Events of one silo that overlap in time are collisions; both get `collision = tr
 
 Every clean dispense (status `completed`, no collision, no rule violation, a positive mass and duration) enters the rate history of its tank. At startup the service reads the last clean dispenses of each tank from `dms.tank_event` (`rate_history.loaded`, `rate_history.short` for tanks with fewer than `n`); a clean dispense whose mass or duration is not positive is kept out and logged as `rate_history.sample_rejected`.
 
-Each collided event gets one row per configured method in `dms.event_estimate`, written in the same transaction as the end of the event: `value_kg` (the theoretical mass, positive) or `missing_reason`, never both. `mean_rate` takes the mean rate of the last `n` clean dispenses of a tank: a dispense is that rate times its duration, a refill is the change of the reading plus, for every dispense that overlapped it, the rate of that dispense's tank times the overlap.
+Each collided event gets one row per configured method in `dms.event_estimate`, written in the same transaction as the end of the event: `value_kg` (the theoretical mass, positive) or `missing_reason`, never both. `mean_rate` takes the mean rate of the last `n` clean dispenses of a tank: a dispense is that rate times its duration, a refill is the change of the reading plus, for every dispense that overlapped it, the rate of that dispense's tank times the overlap. A dispense with an `unknown` start was already in progress when the refill started on its signal edge, so their overlap starts at the start of the refill and the refill is still estimated.
 
 | `missing_reason` | meaning |
 |---|---|
@@ -231,7 +231,6 @@ Each collided event gets one row per configured method in `dms.event_estimate`, 
 | `overlap_with_rule_violation` | a refill overlapped a dispense that broke the rule before the refill ended |
 | `unknown_duration` | a dispense with an `unknown` start, or ended by `signal_lost` or `service_stopped` |
 | `unmeasured_change` | a refill without a fresh reading at its start or end |
-| `unknown_overlap` | a refill overlapped a dispense with an `unknown` start, or an overlap ended by lost signals or a stop |
 | `no_rate_history` | a tank needed for the value has fewer than `n` clean dispenses in its history |
 
 When several reasons apply, the first one in the table is stored.
