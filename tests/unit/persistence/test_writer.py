@@ -7,7 +7,13 @@ from uuid import UUID
 import pytest
 
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.records import (
+    EventRecord,
+    MeterRecord,
+    TemperatureRecord,
+    UnknownSensorRecord,
+    WriterRecord,
+)
 from dms.logs import events
 from dms.persistence.record_store import DataStoreError, TransientStoreError, WriteResult
 from dms.persistence.writer import Writer
@@ -240,10 +246,14 @@ def closed_event() -> ClosedEvent:
     )
 
 
+def event_record() -> EventRecord:
+    return EventRecord(event=closed_event(), collision=True, rule_violation=False)
+
+
 def test_mixed_records_are_written_as_one_batch() -> None:
     store = FakeStore()
     writer, in_queue, _ = build(store)
-    mixed: list[WriterRecord] = [record(1), started_event(), record(2), closed_event()]
+    mixed: list[WriterRecord] = [record(1), started_event(), record(2), event_record()]
     for item in mixed:
         in_queue.put(item)
 
@@ -277,7 +287,7 @@ def test_skipped_readings_are_counted_without_events(
 ) -> None:
     store = FakeStore(duplicates=1)
     writer, in_queue, _ = build(store)
-    for item in (record(1), record(2), started_event(), closed_event()):
+    for item in (record(1), record(2), started_event(), event_record()):
         in_queue.put(item)
 
     writer.step()
@@ -292,7 +302,7 @@ def test_batch_of_only_events_logs_no_skipped_readings(
     store = FakeStore()
     writer, in_queue, _ = build(store)
     in_queue.put(started_event())
-    in_queue.put(closed_event())
+    in_queue.put(event_record())
 
     writer.step()
 
@@ -347,9 +357,9 @@ def test_single_rejected_record_is_logged_and_dropped(
 def test_rejected_event_end_closes_the_row_as_a_fallback(
     logs: list[MutableMapping[str, Any]],
 ) -> None:
-    store = FakeStore(poison=[closed_event()])
+    store = FakeStore(poison=[event_record()])
     writer, in_queue, _ = build(store)
-    for item in (record(1), closed_event(), record(2)):
+    for item in (record(1), event_record(), record(2)):
         in_queue.put(item)
 
     writer.step()
@@ -357,17 +367,19 @@ def test_rejected_event_end_closes_the_row_as_a_fallback(
     assert store.batches == [[record(1)], [record(2)]]
     assert store.closed_rejected == [closed_event()]
     (rejected,) = logs
-    assert rejected["record_type"] == "ClosedEvent"
+    assert rejected["record_type"] == "EventRecord"
     assert rejected["record"]["event_id"] == str(UUID(int=1))
+    assert (rejected["record"]["end_value_kg"], rejected["record"]["collision"]) == (400, True)
+    assert rejected["record"]["rule_violation"] is False
     assert rejected["fallback"] == "closed"
 
 
 def test_rejected_event_end_without_a_row_in_progress_is_only_logged(
     logs: list[MutableMapping[str, Any]],
 ) -> None:
-    store = FakeStore(poison=[closed_event()], close_outcomes=[False])
+    store = FakeStore(poison=[event_record()], close_outcomes=[False])
     writer, in_queue, _ = build(store)
-    in_queue.put(closed_event())
+    in_queue.put(event_record())
 
     writer.step()
 
@@ -377,9 +389,9 @@ def test_rejected_event_end_without_a_row_in_progress_is_only_logged(
 def test_rejected_event_end_whose_fallback_is_rejected_too_is_only_logged(
     logs: list[MutableMapping[str, Any]],
 ) -> None:
-    store = FakeStore(poison=[closed_event()], close_outcomes=[DataStoreError("again")])
+    store = FakeStore(poison=[event_record()], close_outcomes=[DataStoreError("again")])
     writer, in_queue, _ = build(store)
-    in_queue.put(closed_event())
+    in_queue.put(event_record())
     in_queue.put(record(1))
 
     writer.step()

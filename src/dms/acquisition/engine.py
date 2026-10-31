@@ -5,8 +5,15 @@ from collections.abc import Mapping, Sequence
 import structlog
 
 from dms.acquisition.temperature_logging import log_temperature_notice
-from dms.domain.events import ClosedEvent, EventStatus, StartedEvent, StartQuality
-from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.collisions import RuleViolation
+from dms.domain.events import EventStatus, StartedEvent, StartQuality
+from dms.domain.records import (
+    EventRecord,
+    MeterRecord,
+    TemperatureRecord,
+    UnknownSensorRecord,
+    WriterRecord,
+)
 from dms.domain.silo import Silo
 from dms.domain.tank import SignalChange
 from dms.domain.temperatures import TemperatureOutput, TemperatureSensors
@@ -16,7 +23,7 @@ from dms.units import NS_PER_S
 
 GET_TIMEOUT_S = 0.5
 
-type SiloOutput = SignalChange | MeterRecord | StartedEvent | ClosedEvent
+type SiloOutput = SignalChange | RuleViolation | MeterRecord | StartedEvent | EventRecord
 
 logger = structlog.get_logger()
 
@@ -103,9 +110,12 @@ class Engine:
             if isinstance(output, SignalChange):
                 self._log_signal_change(output)
                 continue
+            if isinstance(output, RuleViolation):
+                self._log_rule_violation(output)
+                continue
             if isinstance(output, StartedEvent):
                 self._log_started(output)
-            elif isinstance(output, ClosedEvent):
+            elif isinstance(output, EventRecord):
                 self._log_closed(output)
             self._out_queue.put(output)
 
@@ -125,6 +135,17 @@ class Engine:
             previous=change.previous,
         )
 
+    def _log_rule_violation(self, violation: RuleViolation) -> None:
+        logger.warning(
+            events.SILO_RULE_VIOLATION,
+            silo_id=violation.silo_id,
+            type=violation.kind,
+            tank_id=violation.tank_id,
+            event_id=str(violation.event_id),
+            other_tank_id=violation.other_tank_id,
+            other_event_id=str(violation.other_event_id),
+        )
+
     def _log_started(self, event: StartedEvent) -> None:
         fields = {
             "event_id": str(event.event_id),
@@ -138,7 +159,8 @@ class Engine:
         else:
             logger.info(events.EVENT_STARTED, **fields)
 
-    def _log_closed(self, event: ClosedEvent) -> None:
+    def _log_closed(self, record: EventRecord) -> None:
+        event = record.event
         fields = {
             "event_id": str(event.event_id),
             "tank_id": event.tank_id,
@@ -146,6 +168,8 @@ class Engine:
             "start_value_kg": event.start_value_kg,
             "end_value_kg": event.end_value_kg,
             "duration_s": None if event.duration_ns is None else event.duration_ns / NS_PER_S,
+            "collision": record.collision,
+            "rule_violation": record.rule_violation,
         }
         if event.status is EventStatus.INCOMPLETE:
             logger.error(

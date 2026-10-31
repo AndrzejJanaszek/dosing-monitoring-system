@@ -11,8 +11,8 @@ from dms.acquisition.app import board_wiring, build_silos, meter_wiring
 from dms.acquisition.engine import Engine
 from dms.acquisition.serial.adapter import FrameHandler
 from dms.acquisition.serial.framing import Framer
-from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import WriterRecord
+from dms.domain.events import EndQuality, EventKind, StartedEvent, StartQuality
+from dms.domain.records import EventRecord, WriterRecord
 from dms.messages import EngineMessage, Tick
 from dms.simulator.catalog import SCENARIOS
 from dms.simulator.dms_config import acquisition_config
@@ -82,11 +82,12 @@ def run_pipeline(
     return records
 
 
-def closed_events(records: list[WriterRecord]) -> list[ClosedEvent]:
-    return [record for record in records if isinstance(record, ClosedEvent)]
+def closed_events(records: list[WriterRecord]) -> list[EventRecord]:
+    return [record for record in records if isinstance(record, EventRecord)]
 
 
-def as_expected(event: ClosedEvent) -> ExpectedEvent:
+def as_expected(record: EventRecord) -> ExpectedEvent:
+    event = record.event
     return ExpectedEvent(
         tank_id=event.tank_id,
         kind=event.kind,
@@ -127,11 +128,12 @@ def assert_every_close_follows_its_start(records: list[WriterRecord]) -> None:
         if isinstance(record, StartedEvent):
             assert record.event_id not in started
             started[record.event_id] = record
-        elif isinstance(record, ClosedEvent):
-            opened = started[record.event_id]
-            assert (opened.tank_id, opened.kind) == (record.tank_id, record.kind)
-            assert opened.start_wall_ns == record.start_wall_ns
-            assert opened.start_value_kg == record.start_value_kg
+        elif isinstance(record, EventRecord):
+            event = record.event
+            opened = started[event.event_id]
+            assert (opened.tank_id, opened.kind) == (event.tank_id, event.kind)
+            assert opened.start_wall_ns == event.start_wall_ns
+            assert opened.start_value_kg == event.start_value_kg
 
 
 def without_meter_samples(samples: list[Sample], meter_id: str, around_ns: int) -> list[Sample]:

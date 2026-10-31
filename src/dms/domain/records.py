@@ -12,6 +12,13 @@ class MeterRecord:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class EventRecord:
+    event: ClosedEvent
+    collision: bool
+    rule_violation: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TemperatureRecord:
     sensor_id: int
     wall_ns: int
@@ -28,5 +35,5 @@ class UnknownSensorRecord:
 
 
 type WriterRecord = (
-    MeterRecord | TemperatureRecord | UnknownSensorRecord | StartedEvent | ClosedEvent
+    MeterRecord | TemperatureRecord | UnknownSensorRecord | StartedEvent | EventRecord
 )

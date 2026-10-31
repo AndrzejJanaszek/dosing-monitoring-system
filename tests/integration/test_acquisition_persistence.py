@@ -23,7 +23,13 @@ from dms.config.models import (
     TemperatureSensorConfig,
 )
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.records import (
+    EventRecord,
+    MeterRecord,
+    TemperatureRecord,
+    UnknownSensorRecord,
+    WriterRecord,
+)
 from dms.domain.temperature_error import TemperatureError
 from dms.logs import events
 from dms.persistence.catalog import (
@@ -749,8 +755,20 @@ def started(event_id: UUID = EVENT_ID, *, orphaned: bool = False) -> StartedEven
     )
 
 
-def closed(event_id: UUID = EVENT_ID, *, stale_end: bool = False) -> ClosedEvent:
-    return ClosedEvent(
+def record_of(
+    event: ClosedEvent, *, collision: bool = False, rule_violation: bool = False
+) -> EventRecord:
+    return EventRecord(event=event, collision=collision, rule_violation=rule_violation)
+
+
+def closed(
+    event_id: UUID = EVENT_ID,
+    *,
+    stale_end: bool = False,
+    collision: bool = False,
+    rule_violation: bool = False,
+) -> EventRecord:
+    event = ClosedEvent(
         event_id=event_id,
         tank_id=1,
         kind=EventKind.DISPENSE,
@@ -762,6 +780,12 @@ def closed(event_id: UUID = EVENT_ID, *, stale_end: bool = False) -> ClosedEvent
         start_quality=StartQuality.FRESH,
         end_quality=EndQuality.STALE_READING if stale_end else EndQuality.FRESH,
     )
+    return record_of(event, collision=collision, rule_violation=rule_violation)
+
+
+def event_flags(database_url: str) -> list[TupleRow]:
+    with psycopg.connect(database_url) as reader:
+        return rows(reader, "SELECT rule_violation, collision FROM dms.tank_event ORDER BY id")
 
 
 def event_rows(database_url: str) -> list[TupleRow]:
@@ -822,6 +846,26 @@ def test_event_end_completes_the_started_row_with_the_run_id(
     assert event_rows(fresh_database) == [completed_row()]
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT count(*) FROM dms.tank_event WHERE run_id = 1") == [(1,)]
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [(False, False), (False, True), (True, True)],
+    ids=["clean", "collision", "rule-violation"],
+)
+def test_event_end_stores_the_flags_on_the_started_row(
+    fresh_database: str,
+    writer_connection: psycopg.Connection[TupleRow],
+    flags: tuple[bool, bool],
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    rule_violation, collision = flags
+    store.write([started()])
+    assert event_flags(fresh_database) == [(None, None)]
+
+    store.write([closed(collision=collision, rule_violation=rule_violation)])
+
+    assert event_flags(fresh_database) == [flags]
 
 
 def test_event_end_without_start_creates_the_row(
@@ -898,7 +942,7 @@ def test_orphaned_event_closed_by_lost_signals_keeps_both_qualities(
         end_quality=EndQuality.SIGNAL_LOST,
     )
 
-    store.write([started(orphaned=True), lost])
+    store.write([started(orphaned=True), record_of(lost)])
 
     (row,) = event_rows(fresh_database)
     assert row[4:7] == ("incomplete", "unknown", "signal_lost")
@@ -922,7 +966,7 @@ def test_batch_mixing_readings_and_events_is_one_transaction(
     )
 
     with pytest.raises(DataStoreError):
-        store.write([MeterRecord(1, BASE_NS, 100), started(), violating])
+        store.write([MeterRecord(1, BASE_NS, 100), started(), record_of(violating)])
 
     with psycopg.connect(fresh_database) as reader:
         assert rows(reader, "SELECT count(*) FROM dms.meter_reading") == [(0,)]
@@ -946,7 +990,7 @@ def test_event_end_may_precede_start_on_the_wall_clock(
         end_quality=EndQuality.FRESH,
     )
 
-    store.write([stepped_back])
+    store.write([record_of(stepped_back)])
 
     assert len(event_rows(fresh_database)) == 1
 
@@ -1165,7 +1209,7 @@ def test_batch_with_a_rejected_record_stores_the_other_records_and_keeps_going(
         start_quality=StartQuality.FRESH,
         end_quality=EndQuality.FRESH,
     )
-    for item in (MeterRecord(1, BASE_NS, 100), started(), unknown_tank):
+    for item in (MeterRecord(1, BASE_NS, 100), started(), record_of(unknown_tank)):
         in_queue.put(item)
 
     with capture_logs() as logs:
@@ -1181,7 +1225,7 @@ def test_batch_with_a_rejected_record_stores_the_other_records_and_keeps_going(
     assert [row[4] for row in event_rows(fresh_database)] == ["in_progress"]
     (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
     assert rejected["log_level"] == "critical"
-    assert rejected["record_type"] == "ClosedEvent"
+    assert rejected["record_type"] == "EventRecord"
     assert rejected["record"]["tank_id"] == 99
     assert rejected["fallback"] == "no_row"
 
@@ -1204,7 +1248,7 @@ def test_rejected_event_end_closes_the_row_in_progress_as_record_rejected(
         start_quality=StartQuality.FRESH,
         end_quality=EndQuality.FRESH,
     )
-    in_queue.put(violating)
+    in_queue.put(record_of(violating, collision=True, rule_violation=True))
 
     with capture_logs() as logs:
         writer.step()
@@ -1213,8 +1257,10 @@ def test_rejected_event_end_closes_the_row_in_progress_as_record_rejected(
     assert row[4:7] == ("incomplete", "fresh", "record_rejected")
     assert row[9] == timestamp_from_ns(EVENT_END_NS)
     assert (row[10], row[11]) == (None, None)
+    assert event_flags(fresh_database) == [(None, None)]
     (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
     assert rejected["fallback"] == "closed"
+    assert (rejected["record"]["collision"], rejected["record"]["rule_violation"]) == (True, True)
 
 
 def test_rejected_event_end_does_not_touch_a_row_that_is_not_in_progress(
@@ -1236,7 +1282,7 @@ def test_rejected_event_end_does_not_touch_a_row_that_is_not_in_progress(
         start_quality=StartQuality.FRESH,
         end_quality=EndQuality.FRESH,
     )
-    in_queue.put(violating)
+    in_queue.put(record_of(violating, collision=True, rule_violation=True))
 
     writer.step()
 
