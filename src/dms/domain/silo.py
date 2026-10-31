@@ -2,6 +2,7 @@ from collections.abc import Callable, Mapping, Sequence
 from uuid import UUID
 
 from dms.domain.collisions import CollisionTracker, RuleViolation
+from dms.domain.estimation import MeanRateMethod
 from dms.domain.events import ClosedEvent, StartedEvent, StartQuality
 from dms.domain.finalizer import EventFinalizer
 from dms.domain.rate_history import RateHistory, RateSample, RateSampleRejected
@@ -29,6 +30,7 @@ class Silo:
         started_mono_ns: int,
         rate_samples: Mapping[int, Sequence[RateSample]],
         rate_history_capacity: int,
+        estimation_methods: Sequence[MeanRateMethod],
     ) -> None:
         self.silo_id = silo_id
         self._tanks = {
@@ -42,7 +44,8 @@ class Silo:
             {
                 tank_id: RateHistory(rate_history_capacity, rate_samples.get(tank_id, ()))
                 for tank_id in tank_ids
-            }
+            },
+            estimation_methods,
         )
         self._last_emitted_mono_ns: int | None = None
         self._stale_since_mono_ns: int | None = None

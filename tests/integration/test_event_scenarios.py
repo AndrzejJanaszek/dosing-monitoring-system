@@ -11,12 +11,14 @@ from dms.acquisition.app import board_wiring, build_silos, meter_wiring
 from dms.acquisition.engine import Engine
 from dms.acquisition.serial.adapter import FrameHandler
 from dms.acquisition.serial.framing import Framer
+from dms.domain.estimates import MissingReason
 from dms.domain.events import EndQuality, EventKind, StartedEvent, StartQuality
 from dms.domain.records import EventRecord, WriterRecord
 from dms.messages import EngineMessage, Tick
-from dms.simulator.catalog import OTHER_TANK_SUFFIX, RELATIONS, SCENARIOS
-from dms.simulator.dms_config import acquisition_config
+from dms.simulator.catalog import OTHER_TANK_SUFFIX, RELATION_OFFSET_S, RELATIONS, SCENARIOS
+from dms.simulator.dms_config import SCENARIO_MEAN_RATE_N, acquisition_config
 from dms.simulator.encoders import encode_banner, encode_sample
+from dms.simulator.expected_estimates import expected_estimates
 from dms.simulator.expected_events import ExpectedEvent, expected_events
 from dms.simulator.scenario import Scenario
 from dms.simulator.timeline import MeterSample, PinsSample, Sample, samples_from, scenario_samples
@@ -142,6 +144,38 @@ def assert_every_close_follows_its_start(records: list[WriterRecord]) -> None:
             assert opened.start_value_kg == event.start_value_kg
 
 
+def assert_estimates_match_the_oracle(
+    scenario: Scenario, records: list[WriterRecord], expected: list[ExpectedEvent]
+) -> None:
+    oracle = expected_estimates(scenario, expected, n=SCENARIO_MEAN_RATE_N)
+    for record in closed_events(records):
+        if not record.collision:
+            assert record.estimates == ()
+            continue
+        (estimate,) = record.estimates
+        wanted = oracle[as_expected(record)]
+        assert estimate.missing_reason == wanted.missing_reason, record
+        if wanted.true_kg is None:
+            assert estimate.value_kg is None
+        else:
+            assert estimate.value_kg is not None
+            assert abs(estimate.value_kg - wanted.true_kg) <= wanted.tolerance_kg, record
+
+
+def estimates_by_kind(records: list[WriterRecord]) -> list[tuple[EventKind, object]]:
+    return sorted(
+        (
+            (
+                record.event.kind,
+                estimate.missing_reason if estimate.value_kg is None else estimate.value_kg,
+            )
+            for record in closed_events(records)
+            for estimate in record.estimates
+        ),
+        key=str,
+    )
+
+
 def without_meter_samples(samples: list[Sample], meter_id: str, around_ns: int) -> list[Sample]:
     return [
         sample
@@ -164,6 +198,7 @@ def test_events_of_every_catalogue_scenario_match_the_oracle(
 
     expected = oracle_events(scenario, samples)
     assert system_events(records) == expected
+    assert_estimates_match_the_oracle(scenario, records, expected)
     assert len(expected) == len(scenario.events)
     assert all(is_fresh(event) for event in expected)
     assert all(
@@ -190,7 +225,11 @@ RELATION_SCENARIOS = [
 
 
 def flags_by_kind(events: list[ExpectedEvent]) -> set[tuple[EventKind, bool, bool]]:
-    return {(event.kind, event.collision, event.rule_violation) for event in events}
+    return {
+        (event.kind, event.collision, event.rule_violation)
+        for event in events
+        if event.start_ns >= RELATION_OFFSET_S * NS_PER_S
+    }
 
 
 @pytest.mark.parametrize("name", RELATION_SCENARIOS)
@@ -239,7 +278,11 @@ def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
     tmp_path: Path,
 ) -> None:
     scenario = SCENARIOS["dispense-front-refill"]
-    offset_ns = 95 * NS_PER_S
+    relation_dispense = max(
+        (event for event in scenario.events if event.kind is EventKind.DISPENSE),
+        key=lambda event: event.start_ns,
+    )
+    offset_ns = relation_dispense.start_ns + 5 * NS_PER_S
     samples = list(
         itertools.takewhile(
             lambda sample: sample.at_ns <= scenario.duration_ns - offset_ns,
@@ -261,6 +304,60 @@ def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
         StartQuality.FRESH,
         True,
     )
+    assert estimates_by_kind(records) == [
+        (EventKind.DISPENSE, MissingReason.UNKNOWN_DURATION),
+        (EventKind.REFILL, MissingReason.UNKNOWN_OVERLAP),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name", ["dispense-inner-refill", "dispense-front-multi-inner-back-refill-other-tank"]
+)
+def test_collided_events_after_a_run_up_get_values_close_to_the_truth(
+    name: str, tmp_path: Path
+) -> None:
+    scenario = SCENARIOS[name]
+
+    records = run_pipeline(scenario, list(scenario_samples(scenario)), tmp_path)
+
+    estimates = [estimate for record in closed_events(records) for estimate in record.estimates]
+    assert estimates
+    assert all(estimate.value_kg is not None for estimate in estimates)
+
+
+def test_refill_over_dispenses_of_both_tanks_uses_the_rate_of_each_tank(
+    tmp_path: Path,
+) -> None:
+    scenario = SCENARIOS["refill-with-dispenses-both-tanks-after-run-up"]
+
+    records = run_pipeline(scenario, list(scenario_samples(scenario)), tmp_path)
+
+    assert estimates_by_kind(records) == [
+        (EventKind.DISPENSE, 1_500),
+        (EventKind.DISPENSE, 1_500),
+        (EventKind.DISPENSE, 900),
+        (EventKind.REFILL, 6_000),
+    ]
+
+
+def test_collided_events_without_a_run_up_have_no_rate_history(tmp_path: Path) -> None:
+    scenario = SCENARIOS["refill-with-dispenses-both-tanks"]
+
+    records = run_pipeline(scenario, list(scenario_samples(scenario)), tmp_path)
+
+    assert {reason for _, reason in estimates_by_kind(records)} == {MissingReason.NO_RATE_HISTORY}
+
+
+def test_rule_violation_leaves_the_refill_over_it_without_a_value(tmp_path: Path) -> None:
+    scenario = SCENARIOS["refill-with-concurrent-dispenses-both-tanks"]
+
+    records = run_pipeline(scenario, list(scenario_samples(scenario)), tmp_path)
+
+    assert estimates_by_kind(records) == [
+        (EventKind.DISPENSE, MissingReason.RULE_VIOLATION),
+        (EventKind.DISPENSE, MissingReason.RULE_VIOLATION),
+        (EventKind.REFILL, MissingReason.OVERLAP_WITH_RULE_VIOLATION),
+    ]
 
 
 def test_service_started_in_the_middle_of_an_event_gives_an_unknown_start_event(

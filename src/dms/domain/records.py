@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from dms.domain.estimates import EventEstimate
 from dms.domain.events import ClosedEvent, StartedEvent
 from dms.domain.temperature_error import TemperatureError
 
@@ -16,6 +17,7 @@ class EventRecord:
     event: ClosedEvent
     collision: bool
     rule_violation: bool
+    estimates: tuple[EventEstimate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -550,3 +550,65 @@ def test_valid_range_with_minimum_not_below_maximum_is_reported(tmp_path: Path) 
     assert errors_of(tmp_path) == [
         "acquisition.toml: temperatures.min_valid_c: must be below max_valid_c"
     ]
+
+
+def test_without_estimation_methods_the_mean_rate_of_ten_dispenses_is_used(
+    tmp_path: Path,
+) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT)
+
+    config = load_acquisition(tmp_path)
+
+    assert [(method.method, method.n) for method in config.estimation_methods] == [
+        ("mean_rate", 10)
+    ]
+    assert config.rate_history_capacity == 10
+
+
+def test_estimation_methods_are_read_and_the_largest_n_sets_the_history_capacity(
+    tmp_path: Path,
+) -> None:
+    section = (
+        '\n[[estimation_methods]]\nmethod = "mean_rate"\nn = 3\n'
+        '\n[[estimation_methods]]\nmethod = "mean_rate"\nn = 20\n'
+    )
+    write(tmp_path, "acquisition.toml", BASE_PLANT + section)
+
+    config = load_acquisition(tmp_path)
+
+    assert [method.n for method in config.estimation_methods] == [3, 20]
+    assert config.rate_history_capacity == 20
+
+
+@pytest.mark.parametrize(
+    ("section", "path"),
+    [
+        pytest.param('method = "mean_rate"\nn = 0', "estimation_methods[0].n", id="n-below-one"),
+        pytest.param('method = "median"', "estimation_methods[0].method", id="unknown-method"),
+    ],
+)
+def test_invalid_estimation_method_is_rejected(tmp_path: Path, section: str, path: str) -> None:
+    write(tmp_path, "acquisition.toml", BASE_PLANT + f"\n[[estimation_methods]]\n{section}\n")
+
+    (error,) = errors_of(tmp_path)
+
+    assert error.startswith(f"acquisition.toml: {path}:")
+
+
+def test_empty_list_of_estimation_methods_is_rejected(tmp_path: Path) -> None:
+    write(tmp_path, "acquisition.toml", "estimation_methods = []\n" + BASE_PLANT)
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: estimation_methods: at least one method is required"
+    ]
+
+
+def test_repeated_estimation_method_with_the_same_parameters_is_reported(
+    tmp_path: Path,
+) -> None:
+    section = '\n[[estimation_methods]]\nmethod = "mean_rate"\nn = 5\n'
+    write(tmp_path, "acquisition.toml", BASE_PLANT + section + section)
+
+    assert errors_of(tmp_path) == [
+        "acquisition.toml: estimation_methods[1].params: duplicate params 'mean_rate n=5'"
+    ]

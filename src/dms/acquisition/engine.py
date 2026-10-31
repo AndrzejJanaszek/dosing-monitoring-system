@@ -6,6 +6,7 @@ import structlog
 
 from dms.acquisition.temperature_logging import log_temperature_notice
 from dms.domain.collisions import RuleViolation
+from dms.domain.estimates import EventEstimate
 from dms.domain.events import EventStatus, StartedEvent, StartQuality
 from dms.domain.rate_history import RateSampleRejected
 from dms.domain.records import (
@@ -185,6 +186,7 @@ class Engine:
             "duration_s": None if event.duration_ns is None else event.duration_ns / NS_PER_S,
             "collision": record.collision,
             "rule_violation": record.rule_violation,
+            "estimates": [_estimate_fields(estimate) for estimate in record.estimates],
         }
         if event.status is EventStatus.INCOMPLETE:
             logger.error(
@@ -224,3 +226,9 @@ class Engine:
                 silo_id=silo.silo_id,
                 duration_s=(tick_mono_ns - stale_since_before_ns) / NS_PER_S,
             )
+
+
+def _estimate_fields(estimate: EventEstimate) -> dict[str, object]:
+    if estimate.value_kg is None:
+        return {"method": estimate.method, "missing_reason": estimate.missing_reason}
+    return {"method": estimate.method, "value_kg": estimate.value_kg}

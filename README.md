@@ -130,11 +130,13 @@ The tests then use that server instead of a container. They still work in their 
 
 ## Configuration and logging
 
-Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`, optional `[board]`, `[[tanks]]` and `[[temperature_sensors]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
+Services read TOML files from `DMS_CONFIG_DIR` (default `/etc/dms`): `shared.toml` (`[database]`, `[logging]`) and `acquisition.toml` (`[engine]`, `[[meters]]`, `[[silos]]`, optional `[board]`, `[[tanks]]`, `[[temperature_sensors]]`, `[temperatures]` and `[[estimation_methods]]`). Unknown fields are rejected, and all errors found in a file are reported together, each with the path of the field. The database password is never in these files; libpq reads it from `PGPASSWORD`.
 
 `[board]` describes the Arduino signal module (a serial port like a meter's) and `[[tanks]]` assign its pins to tank signals: `dispense = { pin = 4, active_level = 0 }` means the tank dispenses while pin 4 reads 0. `active_level` is mandatory, `0` or `1`; a pin can be assigned once; a silo has at most two tanks; tanks need `[board]`. A silo without tanks is allowed. `max_frame_length` (optional, in `[[meters]]` and `[board]`; defaults 64 and 512 bytes) caps the length of one frame; longer ones are dropped and counted as garbage. A tank `id` is never reused for another tank, and a tank never moves to another silo: startup is refused (`catalog.identity_violation`) when the database knows the tank under a different silo. Tanks removed from the file stay in `dms.tank` as inactive.
 
 `[[temperature_sensors]]` list the DS18B20 sensors on the board: `id`, `name`, `address` (16 upper-case hex digits), optional `silo_id` (without it the sensor measures the ambient) and optional `leg` (a number from 1, only with `silo_id`). Ids and addresses are unique, and the sensors need `[board]`. Like a tank, a sensor with a given `id` never changes its silo or leg (startup is refused with `catalog.identity_violation`), except that an empty leg may be filled; `name` and `address` may change. Sensors removed from the file stay in `dms.temperature_sensor` as inactive. The address lives only in the configuration and in the `config` snapshot of each run.
+
+`[[estimation_methods]]` list the methods that give a collided event its theoretical value (see [Collisions](#collisions)). There is one method now, `method = "mean_rate"` with `n` (at least 1, default 10). Without the section the service uses `mean_rate` with `n = 10`; an empty list is an error, and a method may appear once with given parameters. The example configuration uses `n = 3`, so that short simulator scenarios already give values.
 
 Logs are structured (structlog). `format = "auto"` prints a human-readable console format on a terminal and JSON otherwise; standard library logs go through the same renderer. Event names are listed in [docs/log-events.md](docs/log-events.md).
 
@@ -177,7 +179,7 @@ Stop the service with `Ctrl+C` or `SIGTERM`; it finishes writing queued readings
 | Exit code of `dms-acquisition` | Meaning |
 |---|---|
 | 0 | clean shutdown |
-| 1 | startup failed (database unreachable, schema incompatible, a tank or temperature sensor moved to another silo or leg), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
+| 1 | startup failed (database unreachable, schema incompatible, a tank or temperature sensor moved to another silo or leg, the rate history could not be read), a thread crashed, or the shutdown lost readings or could not set `stopped_at` |
 | 2 | configuration invalid; all errors are printed |
 
 A meter or the Arduino module that is unplugged or silent does not stop the service: the port is reopened every `reconnect_delay_s`, and no reading is stored while there is none.
@@ -215,7 +217,26 @@ On `SIGTERM` the engine handles the queued messages and then closes every open e
 
 A record the database rejects (a constraint violation or a value out of range) does not stop the writer: the rest of the batch is written, and the record is logged in full as `db.record_rejected` (`CRITICAL`) and dropped. Other database errors still stop the service.
 
-The simulator package can compute the events a scenario should produce from its samples (`dms.simulator.expected_events`); `tests/integration/test_event_scenarios.py` runs the whole catalog through the handlers and the engine and compares the result.
+### Collisions
+
+Events of one silo that overlap in time are collisions; both get `collision = true` in `dms.tank_event`, and the change of the reading during each of them mixes both. Events that touch (one ends in the same signal snapshot in which the other starts) do not collide, because the engine handles the ends of a snapshot before its starts. Two events of the same type on the two tanks of a silo at once break the rule of the plant: both get `rule_violation = true` as well, and `silo.rule_violation` is logged when the second one starts. Both flags are set when the domain closes the event (also on `signal_lost` and `service_stopped`); they stay empty (unknown) while the event is in progress, after `service_crashed` and `record_rejected`, and in rows written before the flags existed.
+
+Every clean dispense (status `completed`, no collision, no rule violation, a positive mass and duration) enters the rate history of its tank. At startup the service reads the last clean dispenses of each tank from `dms.tank_event` (`rate_history.loaded`, `rate_history.short` for tanks with fewer than `n`); a clean dispense whose mass or duration is not positive is kept out and logged as `rate_history.sample_rejected`.
+
+Each collided event gets one row per configured method in `dms.event_estimate`, written in the same transaction as the end of the event: `value_kg` (the theoretical mass, positive) or `missing_reason`, never both. `mean_rate` takes the mean rate of the last `n` clean dispenses of a tank: a dispense is that rate times its duration, a refill is the change of the reading plus, for every dispense that overlapped it, the rate of that dispense's tank times the overlap.
+
+| `missing_reason` | meaning |
+|---|---|
+| `rule_violation` | the event itself breaks the rule of the plant |
+| `overlap_with_rule_violation` | a refill overlapped a dispense that broke the rule before the refill ended |
+| `unknown_duration` | a dispense with an `unknown` start, or ended by `signal_lost` or `service_stopped` |
+| `unmeasured_change` | a refill without a fresh reading at its start or end |
+| `unknown_overlap` | a refill overlapped a dispense with an `unknown` start, or an overlap ended by lost signals or a stop |
+| `no_rate_history` | a tank needed for the value has fewer than `n` clean dispenses in its history |
+
+When several reasons apply, the first one in the table is stored.
+
+The simulator package can compute the events a scenario should produce from its samples, with their flags (`dms.simulator.expected_events`), and the expected estimates of collided events: the exact missing reason, or the true mass of the scenario with a tolerance from the meter division and the pins period (`dms.simulator.expected_estimates`); `tests/integration/test_event_scenarios.py` runs the whole catalog through the handlers and the engine and compares the result.
 
 ### Temperatures
 

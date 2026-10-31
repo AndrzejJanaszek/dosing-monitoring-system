@@ -6,6 +6,7 @@ from dms.config.models import (
     AcquisitionConfig,
     BoardConfig,
     InputConfig,
+    MeanRateConfig,
     MeterConfig,
     SiloConfig,
     TankConfig,
@@ -16,6 +17,7 @@ from dms.simulator.layout import Input, PlantLayout
 
 DEFAULT_RECONNECT_DELAY_S = 5.0
 DEFAULT_SILENCE_TIMEOUT_S = 5.0
+SCENARIO_MEAN_RATE_N = 3
 
 
 def acquisition_config(
@@ -76,6 +78,7 @@ def acquisition_config(
         board=board,
         tanks=tanks,
         temperature_sensors=temperature_sensors,
+        estimation_methods=(MeanRateConfig(n=SCENARIO_MEAN_RATE_N),),
     )
 
 

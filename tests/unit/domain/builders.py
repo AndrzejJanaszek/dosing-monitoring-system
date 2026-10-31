@@ -2,6 +2,7 @@ from collections.abc import Callable, Mapping, Sequence
 from itertools import count
 from uuid import UUID
 
+from dms.domain.estimation import MeanRateMethod
 from dms.domain.rate_history import RateSample
 from dms.domain.silo import Silo
 from dms.domain.temperatures import TemperatureSensors
@@ -34,6 +35,7 @@ def build_silo(
     new_event_id: Callable[[], UUID] | None = None,
     rate_samples: Mapping[int, Sequence[RateSample]] | None = None,
     rate_history_capacity: int = RATE_HISTORY_CAPACITY,
+    estimation_methods: Sequence[MeanRateMethod] = (),
 ) -> Silo:
     return Silo(
         silo_id,
@@ -46,6 +48,7 @@ def build_silo(
         started_mono_ns=started_mono_ns,
         rate_samples=rate_samples if rate_samples is not None else {},
         rate_history_capacity=rate_history_capacity,
+        estimation_methods=estimation_methods,
     )
 
 

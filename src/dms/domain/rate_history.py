@@ -6,8 +6,6 @@ from uuid import UUID
 from dms.domain.events import EventKind, EventStatus
 from dms.domain.records import EventRecord
 
-DEFAULT_RATE_HISTORY_CAPACITY = 10
-
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RateSample:

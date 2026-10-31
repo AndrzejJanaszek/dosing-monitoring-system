@@ -10,6 +10,7 @@ from uuid import UUID
 import structlog
 
 from dms.clock import Clock, SystemClock
+from dms.domain.estimates import EventEstimate
 from dms.domain.events import ClosedEvent
 from dms.domain.records import EventRecord, WriterRecord
 from dms.logs import events
@@ -46,8 +47,18 @@ def _record_fields(record: WriterRecord) -> dict[str, Any]:
             **_dataclass_fields(record.event),
             "collision": record.collision,
             "rule_violation": record.rule_violation,
+            "estimates": [_estimate_fields(estimate) for estimate in record.estimates],
         }
     return _dataclass_fields(record)
+
+
+def _estimate_fields(estimate: EventEstimate) -> dict[str, Any]:
+    return {
+        "method": estimate.method,
+        "params": dict(estimate.params),
+        "value_kg": estimate.value_kg,
+        "missing_reason": estimate.missing_reason,
+    }
 
 
 def _dataclass_fields(record: WriterRecord | ClosedEvent) -> dict[str, Any]:

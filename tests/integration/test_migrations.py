@@ -1,11 +1,13 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import psycopg
 import pytest
 from psycopg import errors
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import TupleRow
+from psycopg.types.json import Jsonb
 
 from dms.persistence.catalog import start_run
 from dms.persistence.migrate import (
@@ -44,12 +46,13 @@ def test_migration_on_empty_database_creates_tables_and_records_versions(
     with owner_connection(fresh_database) as connection:
         applied = apply_migrations(connection, load_migrations())
 
-        assert [migration.version for migration in applied] == [1, 2, 3, 4, 5, 6, 7]
+        assert [migration.version for migration in applied] == [1, 2, 3, 4, 5, 6, 7, 8]
         assert table_names(connection) == {
             "schema_migration",
             "silo",
             "tank",
             "tank_event",
+            "event_estimate",
             "temperature_sensor",
             "temperature_reading",
             "unknown_sensor_reading",
@@ -57,7 +60,7 @@ def test_migration_on_empty_database_creates_tables_and_records_versions(
             "meter_reading",
         }
         assert database_schema_version(connection) == package_schema_version()
-        assert str(package_schema_version()) == "1.6.0"
+        assert str(package_schema_version()) == "1.7.0"
 
 
 def test_second_run_changes_nothing(fresh_database: str) -> None:
@@ -66,7 +69,7 @@ def test_second_run_changes_nothing(fresh_database: str) -> None:
 
         assert apply_migrations(connection, load_migrations()) == []
         row = connection.execute("SELECT count(*) FROM dms.schema_migration").fetchone()
-        assert row == (7,)
+        assert row == (8,)
 
 
 def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str) -> None:
@@ -86,6 +89,7 @@ def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str)
             "0005_temperature_sensor.sql",
             "0006_temperature_reading.sql",
             "0007_event_flags.sql",
+            "0008_event_estimate.sql",
         ]
         assert "meter_reading" not in table_names(connection)
 
@@ -94,13 +98,13 @@ def test_database_ahead_of_package_is_refused(fresh_database: str) -> None:
     with owner_connection(fresh_database) as connection:
         apply_migrations(connection, load_migrations())
         connection.execute(
-            "INSERT INTO dms.schema_migration VALUES (8, 'future', 'x', '1.7.0', now())"
+            "INSERT INTO dms.schema_migration VALUES (9, 'future', 'x', '1.8.0', now())"
         )
 
         with pytest.raises(DatabaseAheadError) as raised:
             apply_migrations(connection, load_migrations())
 
-        assert raised.value.migrations == ["0008_future"]
+        assert raised.value.migrations == ["0009_future"]
 
 
 def test_failing_migration_leaves_no_trace(fresh_database: str, tmp_path: Path) -> None:
@@ -192,6 +196,7 @@ def test_writer_role_inserts_meter_reading(
         "DELETE FROM dms.silo",
         "DELETE FROM dms.meter_reading",
         "DELETE FROM dms.tank_event",
+        "DELETE FROM dms.event_estimate",
         "DELETE FROM dms.temperature_reading",
         "UPDATE dms.unknown_sensor_reading SET value_c = 0",
         "UPDATE dms.meter_reading SET value_kg = 0",
@@ -217,6 +222,7 @@ def test_writer_role_is_refused_forbidden_statements(
         "run",
         "meter_reading",
         "tank_event",
+        "event_estimate",
         "temperature_sensor",
         "temperature_reading",
         "unknown_sensor_reading",
@@ -367,3 +373,72 @@ def test_events_stored_before_the_flags_migration_have_unknown_flags(
 
         rows = connection.execute("SELECT rule_violation, collision FROM dms.tank_event")
         assert rows.fetchall() == [(None, None)]
+
+
+INSERT_ESTIMATE_SQL = (
+    "INSERT INTO dms.event_estimate (event_id, method, params, value_kg, missing_reason,"
+    " computed_at) VALUES (%s, 'mean_rate', %s, %s, %s, now())"
+)
+
+
+def seed_closed_event(connection: psycopg.Connection[TupleRow]) -> UUID:
+    run_id = seed_tank_and_run(connection)
+    row = connection.execute(
+        INSERT_EVENT_SQL + " RETURNING id",
+        [run_id, "incomplete", datetime.now(UTC), "signal_lost", True, True],
+    ).fetchone()
+    assert row is not None
+    event_id: UUID = row[0]
+    return event_id
+
+
+@pytest.mark.parametrize(
+    "result",
+    [(None, None), (1500, "no_rate_history")],
+    ids=["neither", "both"],
+)
+def test_estimate_has_either_a_value_or_a_missing_reason(
+    migrated_connection: psycopg.Connection[TupleRow], result: tuple[int | None, str | None]
+) -> None:
+    event_id = seed_closed_event(migrated_connection)
+
+    with pytest.raises(errors.CheckViolation):
+        migrated_connection.execute(INSERT_ESTIMATE_SQL, [event_id, Jsonb({"n": 10}), *result])
+
+
+def test_estimate_key_is_the_event_method_and_parameters(
+    migrated_connection: psycopg.Connection[TupleRow],
+) -> None:
+    event_id = seed_closed_event(migrated_connection)
+    migrated_connection.execute(INSERT_ESTIMATE_SQL, [event_id, Jsonb({"n": 10}), 1500, None])
+    migrated_connection.execute(INSERT_ESTIMATE_SQL, [event_id, Jsonb({"n": 3}), -20, None])
+
+    with pytest.raises(errors.UniqueViolation):
+        migrated_connection.execute(
+            INSERT_ESTIMATE_SQL, [event_id, Jsonb({"n": 10}), None, "no_rate_history"]
+        )
+
+
+def test_estimate_needs_its_event(migrated_connection: psycopg.Connection[TupleRow]) -> None:
+    with pytest.raises(errors.ForeignKeyViolation):
+        migrated_connection.execute(
+            INSERT_ESTIMATE_SQL, [UUID(int=1), Jsonb({"n": 10}), 1500, None]
+        )
+
+
+def test_writer_role_upserts_estimates(
+    migrated_connection: psycopg.Connection[TupleRow],
+) -> None:
+    event_id = seed_closed_event(migrated_connection)
+    set_role(migrated_connection, "dms_writer")
+    upsert = (
+        INSERT_ESTIMATE_SQL + " ON CONFLICT (event_id, method, params) DO UPDATE SET"
+        " value_kg = EXCLUDED.value_kg, missing_reason = EXCLUDED.missing_reason,"
+        " computed_at = EXCLUDED.computed_at"
+    )
+
+    migrated_connection.execute(upsert, [event_id, Jsonb({"n": 10}), 1500, None])
+    migrated_connection.execute(upsert, [event_id, Jsonb({"n": 10}), 1520, None])
+
+    rows = migrated_connection.execute("SELECT value_kg FROM dms.event_estimate").fetchall()
+    assert rows == [(1520,)]

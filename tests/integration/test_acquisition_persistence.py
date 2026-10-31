@@ -1,3 +1,4 @@
+import dataclasses
 import queue
 import threading
 from collections.abc import MutableMapping
@@ -12,19 +13,23 @@ from psycopg.rows import TupleRow
 from structlog.testing import capture_logs
 
 from dms.acquisition import startup
+from dms.acquisition.app import build_silos
 from dms.acquisition.startup import StartupError, run_startup_sequence
 from dms.config.models import (
+    DEFAULT_MEAN_RATE_N,
     AcquisitionConfig,
     BoardConfig,
     InputConfig,
+    MeanRateConfig,
     MeterConfig,
     MeterFormat,
     SiloConfig,
     TankConfig,
     TemperatureSensorConfig,
 )
+from dms.domain.estimates import EstimationMethodId, EventEstimate, MissingReason
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.rate_history import DEFAULT_RATE_HISTORY_CAPACITY, RateSample, rate_sample_of
+from dms.domain.rate_history import RateSample, rate_sample_of
 from dms.domain.records import (
     EventRecord,
     MeterRecord,
@@ -34,6 +39,7 @@ from dms.domain.records import (
 )
 from dms.domain.temperature_error import TemperatureError
 from dms.logs import events
+from dms.messages import SignalStates, TankSignals
 from dms.persistence.catalog import (
     SyncResult,
     TankMove,
@@ -1355,19 +1361,19 @@ def test_startup_loads_the_rate_history_and_reports_short_ones(
     fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
 ) -> None:
     store = build_store(fresh_database, writer_connection)
-    store.write([case_record(number) for number in range(30, 30 + DEFAULT_RATE_HISTORY_CAPACITY)])
+    store.write([case_record(number) for number in range(30, 30 + DEFAULT_MEAN_RATE_N)])
     config = acquisition_config([silo(1)], [tank(1), tank(2)])
 
     with capture_logs() as logs:
         started_run = run_startup_sequence(writer_connection, config)
 
     assert [len(samples) for samples in started_run.rate_samples.values()] == [
-        DEFAULT_RATE_HISTORY_CAPACITY,
+        DEFAULT_MEAN_RATE_N,
         0,
     ]
     (loaded,) = [entry for entry in logs if entry["event"] == events.RATE_HISTORY_LOADED]
     assert loaded["tanks"] == [
-        {"tank_id": 1, "samples": DEFAULT_RATE_HISTORY_CAPACITY},
+        {"tank_id": 1, "samples": DEFAULT_MEAN_RATE_N},
         {"tank_id": 2, "samples": 0},
     ]
     (short,) = [entry for entry in logs if entry["event"] == events.RATE_HISTORY_SHORT]
@@ -1389,3 +1395,112 @@ def test_failed_rate_history_load_refuses_startup_without_starting_a_run(
         (events.DB_STARTUP_FAILED, "rate_history")
     ]
     assert rows(writer_connection, "SELECT count(*) FROM dms.run") == [(0,)]
+
+
+def estimated(*estimates: EventEstimate) -> EventRecord:
+    return dataclasses.replace(closed(collision=True), estimates=estimates)
+
+
+def mean_rate(value_kg: int | None, missing_reason: MissingReason | None = None) -> EventEstimate:
+    return EventEstimate(
+        method=EstimationMethodId.MEAN_RATE,
+        params={"n": 10},
+        value_kg=value_kg,
+        missing_reason=missing_reason,
+    )
+
+
+def estimate_rows(database_url: str) -> list[TupleRow]:
+    with psycopg.connect(database_url) as reader:
+        return rows(
+            reader,
+            "SELECT event_id, method, params, value_kg, missing_reason, computed_at IS NOT NULL"
+            " FROM dms.event_estimate ORDER BY params",
+        )
+
+
+def test_event_end_stores_its_estimates_in_the_same_batch(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    with_reason = dataclasses.replace(
+        mean_rate(None, MissingReason.NO_RATE_HISTORY), params={"n": 3}
+    )
+
+    store.write([started(), estimated(mean_rate(1_520), with_reason)])
+
+    assert estimate_rows(fresh_database) == [
+        (EVENT_ID, "mean_rate", {"n": 3}, None, "no_rate_history", True),
+        (EVENT_ID, "mean_rate", {"n": 10}, 1_520, None, True),
+    ]
+    assert event_flags(fresh_database) == [(False, True)]
+
+
+def test_repeated_estimate_overwrites_the_stored_one(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    store.write([started(), estimated(mean_rate(1_520))])
+
+    store.write([estimated(mean_rate(None, MissingReason.RULE_VIOLATION))])
+
+    assert estimate_rows(fresh_database) == [
+        (EVENT_ID, "mean_rate", {"n": 10}, None, "rule_violation", True)
+    ]
+
+
+def test_record_with_a_rejected_estimate_leaves_neither_flags_nor_estimates(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    writer, in_queue = build_writer(store)
+    store.write([started()])
+    in_queue.put(estimated(mean_rate(3_000_000_000)))
+
+    with capture_logs() as logs:
+        writer.step()
+
+    (row,) = event_rows(fresh_database)
+    assert row[4:7] == ("incomplete", "fresh", "record_rejected")
+    assert event_flags(fresh_database) == [(None, None)]
+    assert estimate_rows(fresh_database) == []
+    (rejected,) = [entry for entry in logs if entry["event"] == events.DB_RECORD_REJECTED]
+    assert rejected["record"]["estimates"] == [
+        {
+            "method": "mean_rate",
+            "params": {"n": 10},
+            "value_kg": 3_000_000_000,
+            "missing_reason": None,
+        }
+    ]
+
+
+def signals(at_s: float, *, dispense: bool = False, refill: bool = False) -> SignalStates:
+    at_ns = BASE_NS + round(at_s * NS_PER_S)
+    return SignalStates((TankSignals(1, dispense=dispense, refill=refill),), at_ns, at_ns)
+
+
+def test_rate_history_loaded_at_startup_gives_the_first_collision_a_value(
+    fresh_database: str, writer_connection: psycopg.Connection[TupleRow]
+) -> None:
+    store = build_store(fresh_database, writer_connection)
+    store.write([case_record(number) for number in (61, 62, 63)])
+    config = acquisition_config([silo(1)], [tank(1)]).model_copy(
+        update={"estimation_methods": (MeanRateConfig(n=3),)}
+    )
+    started_run = run_startup_sequence(writer_connection, config)
+    (silo_1,) = build_silos(
+        config,
+        new_event_id=iter([UUID(int=70), UUID(int=71)]).__next__,
+        started_wall_ns=BASE_NS,
+        started_mono_ns=BASE_NS,
+        rate_samples=started_run.rate_samples,
+    ).values()
+    silo_1.on_signals(signals(0))
+    silo_1.on_signals(signals(1, refill=True))
+    silo_1.on_signals(signals(2, refill=True, dispense=True))
+
+    outputs = silo_1.on_signals(signals(12, refill=True))
+
+    (record,) = [item for item in outputs if isinstance(item, EventRecord)]
+    assert [(item.value_kg, item.missing_reason) for item in record.estimates] == [(500, None)]

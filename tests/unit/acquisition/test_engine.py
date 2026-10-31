@@ -5,6 +5,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from dms.acquisition.engine import Engine
+from dms.domain.estimation import MeanRateMethod
 from dms.domain.events import StartedEvent
 from dms.domain.records import (
     EventRecord,
@@ -214,6 +215,7 @@ def test_started_and_completed_events_are_logged_with_the_delta() -> None:
     assert (event_logs[1]["delta_kg"], event_logs[1]["duration_s"]) == (-120, 4.5)
     assert (event_logs[1]["tank_id"], event_logs[1]["type"]) == (1, "dispense")
     assert (event_logs[1]["collision"], event_logs[1]["rule_violation"]) == (False, False)
+    assert event_logs[1]["estimates"] == []
 
 
 def test_clean_dispense_with_a_growing_reading_is_logged_as_a_rejected_rate_sample() -> None:
@@ -268,7 +270,9 @@ def test_rule_violation_is_logged_when_it_starts_and_on_both_closed_events() -> 
     engine = Engine(
         in_queue=queue.Queue(),
         out_queue=out_queue,
-        silos_by_meter={"m1": build_silo(1, tank_ids=(1, 2))},
+        silos_by_meter={
+            "m1": build_silo(1, tank_ids=(1, 2), estimation_methods=[MeanRateMethod(3)])
+        },
         stop_event=threading.Event(),
     )
     frames = [
@@ -298,6 +302,10 @@ def test_rule_violation_is_logged_when_it_starts_and_on_both_closed_events() -> 
     assert [(entry["collision"], entry["rule_violation"]) for entry in closed] == [
         (True, True),
         (True, True),
+    ]
+    assert [entry["estimates"] for entry in closed] == [
+        [{"method": "mean_rate", "missing_reason": "rule_violation"}],
+        [{"method": "mean_rate", "missing_reason": "rule_violation"}],
     ]
     assert all(isinstance(item, StartedEvent | EventRecord) for item in records(out_queue))
 

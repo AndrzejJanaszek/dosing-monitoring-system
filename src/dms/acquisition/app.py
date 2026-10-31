@@ -27,7 +27,8 @@ from dms.config.models import (
     MeterFormat,
     TankConfig,
 )
-from dms.domain.rate_history import DEFAULT_RATE_HISTORY_CAPACITY, RateSample
+from dms.domain.estimation import MeanRateMethod
+from dms.domain.rate_history import RateSample
 from dms.domain.records import WriterRecord
 from dms.domain.silo import Silo
 from dms.domain.temperatures import TemperatureSensors
@@ -150,7 +151,8 @@ def build_silos(
             started_wall_ns=started_wall_ns,
             started_mono_ns=started_mono_ns,
             rate_samples=rate_samples,
-            rate_history_capacity=DEFAULT_RATE_HISTORY_CAPACITY,
+            rate_history_capacity=config.rate_history_capacity,
+            estimation_methods=[MeanRateMethod(method.n) for method in config.estimation_methods],
         )
         for silo in config.silos
     }
