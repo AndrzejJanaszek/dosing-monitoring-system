@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from dms.domain.estimates import EstimationMethodId
 from dms.domain.events import EventKind
 from dms.logs.setup import LogFormat, LogLevel
 
@@ -31,6 +32,7 @@ DEFAULT_TEMPERATURE_MAX_READING_AGE_S = 5.0
 DEFAULT_MIN_VALID_TEMPERATURE_C = -40.0
 DEFAULT_MAX_VALID_TEMPERATURE_C = 80.0
 SENSOR_ADDRESS_PATTERN = re.compile(r"^[0-9A-F]{16}$")
+DEFAULT_MEAN_RATE_N = 10
 
 type BaudRate = Literal[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
 
@@ -126,6 +128,11 @@ class TemperaturesConfig(FrozenModel):
     )
 
 
+class MeanRateConfig(FrozenModel):
+    method: EstimationMethodId = EstimationMethodId.MEAN_RATE
+    n: int = Field(default=DEFAULT_MEAN_RATE_N, ge=NON_EMPTY)
+
+
 class AcquisitionConfig(FrozenModel):
     engine: EngineConfig = EngineConfig()
     meters: tuple[MeterConfig, ...]
@@ -134,6 +141,11 @@ class AcquisitionConfig(FrozenModel):
     tanks: tuple[TankConfig, ...] = ()
     temperature_sensors: tuple[TemperatureSensorConfig, ...] = ()
     temperatures: TemperaturesConfig = TemperaturesConfig()
+    estimation_methods: tuple[MeanRateConfig, ...] = (MeanRateConfig(),)
+
+    @property
+    def rate_history_capacity(self) -> int:
+        return max(method.n for method in self.estimation_methods)
 
 
 def validate_acquisition_rules(config: AcquisitionConfig) -> list[str]:
@@ -144,6 +156,7 @@ def validate_acquisition_rules(config: AcquisitionConfig) -> list[str]:
     errors.extend(_silo_errors(config))
     errors.extend(_tank_errors(config))
     errors.extend(_temperature_sensor_errors(config))
+    errors.extend(_estimation_method_errors(config))
     return errors
 
 
@@ -230,6 +243,16 @@ def _temperature_sensor_errors(config: AcquisitionConfig) -> list[str]:
         if sensor.leg is not None and sensor.silo_id is None:
             errors.append(f"temperature_sensors[{index}].leg: leg requires a silo_id")
     return errors
+
+
+def _estimation_method_errors(config: AcquisitionConfig) -> list[str]:
+    if not config.estimation_methods:
+        return ["estimation_methods: at least one method is required"]
+    return _duplicates(
+        "estimation_methods",
+        "params",
+        [f"{method.method} n={method.n}" for method in config.estimation_methods],
+    )
 
 
 def _duplicates[T](collection: str, field: str, values: list[T]) -> list[str]:
