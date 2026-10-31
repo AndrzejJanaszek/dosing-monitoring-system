@@ -133,6 +133,14 @@ def test_refill_ending_while_the_dispense_goes_on_is_estimated_up_to_its_end() -
     assert estimate(closed, [overlap(start_s=125, end_s=130)]).value_kg == 4_000 + 55 * 5
 
 
+def test_refill_over_a_dispense_with_an_unknown_start_counts_from_the_refill_start() -> None:
+    closed = event(EventKind.REFILL, start_value_kg=5_000, end_value_kg=9_000)
+
+    result = estimate(closed, [overlap(start_s=100, end_s=120, partner_start_known=False)])
+
+    assert result.value_kg == 4_000 + 55 * 20
+
+
 def test_value_is_rounded_to_whole_kilograms() -> None:
     closed = event(EventKind.DISPENSE, start_s=100, end_s=100.01)
 
@@ -178,16 +186,6 @@ def test_value_is_rounded_to_whole_kilograms() -> None:
             MissingReason.UNMEASURED_CHANGE,
         ),
         (
-            event(EventKind.REFILL),
-            [overlap(partner_start_known=False)],
-            MissingReason.UNKNOWN_OVERLAP,
-        ),
-        (
-            event(EventKind.REFILL),
-            [overlap(end_known=False)],
-            MissingReason.UNKNOWN_OVERLAP,
-        ),
-        (
             event(EventKind.DISPENSE, tank_id=3),
             [overlap(partner_kind=EventKind.REFILL)],
             MissingReason.NO_RATE_HISTORY,
@@ -206,8 +204,6 @@ def test_value_is_rounded_to_whole_kilograms() -> None:
         "dispense-ended-by-stop",
         "refill-without-start-value",
         "refill-ended-by-lost-signals",
-        "dispense-with-unknown-start-under-refill",
-        "overlap-ended-by-lost-signals",
         "dispense-tank-without-history",
         "refill-over-a-tank-without-history",
     ],
@@ -249,21 +245,15 @@ def test_dispense_over_a_refill_that_overlaps_a_rule_violation_is_still_estimate
         ),
         (
             event(EventKind.REFILL, start_value_kg=None, start_quality=StartQuality.STALE_READING),
-            [overlap(partner_tank_id=3, partner_start_known=False)],
+            [overlap(partner_tank_id=3)],
             MissingReason.UNMEASURED_CHANGE,
-        ),
-        (
-            event(EventKind.REFILL),
-            [overlap(partner_tank_id=3, partner_start_known=False)],
-            MissingReason.UNKNOWN_OVERLAP,
         ),
     ],
     ids=[
         "violation-before-missing-data",
         "violation-of-a-partner-before-missing-data",
         "missing-duration-before-missing-history",
-        "unmeasured-change-before-unknown-overlap",
-        "unknown-overlap-before-missing-history",
+        "unmeasured-change-before-missing-history",
     ],
 )
 def test_first_reason_in_order_is_reported(

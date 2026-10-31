@@ -75,7 +75,7 @@ class _Estimator:
         ):
             return MissingReason.OVERLAP_WITH_RULE_VIOLATION
 
-        data_reason = _data_reason(event, overlapping)
+        data_reason = _data_reason(event)
         if data_reason is not None:
             return data_reason
 
@@ -153,7 +153,7 @@ class _Estimator:
         return layout.silo_of(first.tank_id).id == layout.silo_of(second.tank_id).id
 
 
-def _data_reason(event: ExpectedEvent, overlapping: list[ExpectedEvent]) -> MissingReason | None:
+def _data_reason(event: ExpectedEvent) -> MissingReason | None:
     if event.kind is EventKind.DISPENSE:
         if event.start_quality is StartQuality.UNKNOWN or event.end_quality not in (
             EndQuality.FRESH,
@@ -163,8 +163,6 @@ def _data_reason(event: ExpectedEvent, overlapping: list[ExpectedEvent]) -> Miss
         return None
     if event.start_value_kg is None or event.end_value_kg is None:
         return MissingReason.UNMEASURED_CHANGE
-    if any(other.start_quality is StartQuality.UNKNOWN for other in overlapping):
-        return MissingReason.UNKNOWN_OVERLAP
     return None
 
 

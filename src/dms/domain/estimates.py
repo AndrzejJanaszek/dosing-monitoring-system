@@ -12,7 +12,6 @@ class MissingReason(StrEnum):
     OVERLAP_WITH_RULE_VIOLATION = "overlap_with_rule_violation"
     UNKNOWN_DURATION = "unknown_duration"
     UNMEASURED_CHANGE = "unmeasured_change"
-    UNKNOWN_OVERLAP = "unknown_overlap"
     NO_RATE_HISTORY = "no_rate_history"
 
 
