@@ -158,7 +158,7 @@ def store_records(
     database_url: str, config: AcquisitionConfig, records: list[WriterRecord]
 ) -> None:
     with connect_as(database_url, WRITER_ROLE) as connection:
-        run_id = run_startup_sequence(connection, config)
+        run_id = run_startup_sequence(connection, config).run_id
         store = PostgresRecordStore(
             connection, lambda: connect_as(database_url, WRITER_ROLE), run_id
         )

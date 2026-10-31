@@ -1,15 +1,18 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from uuid import UUID
 
 from dms.domain.collisions import CollisionTracker, RuleViolation
 from dms.domain.events import ClosedEvent, StartedEvent, StartQuality
-from dms.domain.finalizer import finalize_event
+from dms.domain.finalizer import EventFinalizer
+from dms.domain.rate_history import RateHistory, RateSample, RateSampleRejected
 from dms.domain.reading_cache import ReadingCache
 from dms.domain.records import EventRecord, MeterRecord
 from dms.domain.tank import SignalChange, Tank, TankOutput
 from dms.messages import MeterReading, SignalStates, Tick
 
-type SignalsOutput = SignalChange | EventRecord | StartedEvent | RuleViolation
+type SignalsOutput = SignalChange | EventRecord | RateSampleRejected | StartedEvent | RuleViolation
+type TickOutput = MeterRecord | EventRecord | RateSampleRejected
+type ShutdownOutput = EventRecord | RateSampleRejected
 
 
 class Silo:
@@ -24,6 +27,8 @@ class Silo:
         new_event_id: Callable[[], UUID],
         started_wall_ns: int,
         started_mono_ns: int,
+        rate_samples: Mapping[int, Sequence[RateSample]],
+        rate_history_capacity: int,
     ) -> None:
         self.silo_id = silo_id
         self._tanks = {
@@ -33,6 +38,12 @@ class Silo:
         self._max_signal_age_ns = max_signal_age_ns
         self._cache = ReadingCache(reading_cache_window_ns)
         self._collisions = CollisionTracker(silo_id)
+        self._finalizer = EventFinalizer(
+            {
+                tank_id: RateHistory(rate_history_capacity, rate_samples.get(tank_id, ()))
+                for tank_id in tank_ids
+            }
+        )
         self._last_emitted_mono_ns: int | None = None
         self._stale_since_mono_ns: int | None = None
         self._last_signals_wall_ns = started_wall_ns
@@ -66,9 +77,10 @@ class Silo:
 
         changes = [output for output in tank_outputs if isinstance(output, SignalChange)]
         closed = [
-            self._finalize(output, states.mono_ns)
+            item
             for output in tank_outputs
             if isinstance(output, ClosedEvent)
+            for item in self._finalize(output, states.mono_ns)
         ]
         started = [
             item
@@ -78,29 +90,36 @@ class Silo:
         ]
         return [*changes, *closed, *started]
 
-    def on_tick(self, tick: Tick) -> list[MeterRecord | EventRecord]:
-        records: list[MeterRecord | EventRecord] = []
+    def on_tick(self, tick: Tick) -> list[TickOutput]:
+        records: list[TickOutput] = []
         record = self._cyclic_record(tick)
         if record is not None:
             records.append(record)
         records.extend(self._events_closed_by_lost_signals(tick))
         return records
 
-    def on_shutdown(self) -> list[EventRecord]:
+    def on_shutdown(self) -> list[ShutdownOutput]:
         closed: list[ClosedEvent] = []
         for tank in self._tanks.values():
             closed.extend(tank.on_shutdown(self._last_signals_wall_ns, self._last_signals_mono_ns))
-        return [self._finalize(event, self._last_signals_mono_ns) for event in closed]
+        return self._finalize_all(closed, self._last_signals_mono_ns)
 
     def _open(self, event: StartedEvent, mono_ns: int) -> list[StartedEvent | RuleViolation]:
         start_mono_ns = None if event.start_quality is StartQuality.UNKNOWN else mono_ns
         return [event, *self._collisions.on_started(event, start_mono_ns)]
 
-    def _finalize(self, event: ClosedEvent, end_mono_ns: int) -> EventRecord:
+    def _finalize(
+        self, event: ClosedEvent, end_mono_ns: int
+    ) -> list[EventRecord | RateSampleRejected]:
         overlaps = self._collisions.on_closed(
             event.event_id, end_mono_ns, edge_known=event.ended_on_signal_edge
         )
-        return finalize_event(event, overlaps)
+        return self._finalizer.finalize(event, overlaps)
+
+    def _finalize_all(
+        self, events: Sequence[ClosedEvent], end_mono_ns: int
+    ) -> list[EventRecord | RateSampleRejected]:
+        return [item for event in events for item in self._finalize(event, end_mono_ns)]
 
     def _fresh_value_at(self, mono_ns: int) -> int | None:
         reading = self._cache.at_or_before(mono_ns)
@@ -122,7 +141,7 @@ class Silo:
         self._last_emitted_mono_ns = reading.mono_ns
         return MeterRecord(self.silo_id, reading.wall_ns, reading.value_kg)
 
-    def _events_closed_by_lost_signals(self, tick: Tick) -> list[EventRecord]:
+    def _events_closed_by_lost_signals(self, tick: Tick) -> list[EventRecord | RateSampleRejected]:
         if not self._tanks or self._signals_stale_since_mono_ns is not None:
             return []
         if tick.mono_ns - self._last_signals_mono_ns <= self._max_signal_age_ns:
@@ -133,4 +152,4 @@ class Silo:
             closed.extend(
                 tank.on_signals_lost(self._last_signals_wall_ns, self._last_signals_mono_ns)
             )
-        return [self._finalize(event, self._last_signals_mono_ns) for event in closed]
+        return self._finalize_all(closed, self._last_signals_mono_ns)

@@ -1,10 +1,13 @@
 import importlib.metadata
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import psycopg
 import structlog
 from psycopg.rows import TupleRow
 
 from dms.config.models import AcquisitionConfig
+from dms.domain.rate_history import DEFAULT_RATE_HISTORY_CAPACITY, RateSample
 from dms.logs import events
 from dms.persistence.catalog import (
     close_crashed_events,
@@ -15,6 +18,7 @@ from dms.persistence.catalog import (
     tank_identity_violations,
     temperature_sensor_identity_violations,
 )
+from dms.persistence.rate_history import load_rate_samples
 from dms.persistence.schema import (
     MigrationFilesError,
     SchemaIncompatibleError,
@@ -31,9 +35,15 @@ class StartupError(Exception):
     pass
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StartedRun:
+    run_id: int
+    rate_samples: dict[int, list[RateSample]]
+
+
 def run_startup_sequence(
     connection: psycopg.Connection[TupleRow], config: AcquisitionConfig
-) -> int:
+) -> StartedRun:
     try:
         check_schema_compatible(connection)
     except SchemaIncompatibleError as error:
@@ -58,6 +68,7 @@ def run_startup_sequence(
                 config.model_dump(mode="json", exclude_none=True),
             )
             crashed_events = close_crashed_events(connection, run_id)
+            rate_samples = _load_rate_history(connection, config)
     except psycopg.Error as error:
         logger.critical(events.DB_STARTUP_FAILED, step="catalog_and_run", error=str(error))
         raise StartupError(str(error)) from error
@@ -83,7 +94,34 @@ def run_startup_sequence(
                 for item in crashed_events
             ],
         )
-    return run_id
+    _log_rate_history(rate_samples, DEFAULT_RATE_HISTORY_CAPACITY)
+    return StartedRun(run_id=run_id, rate_samples=rate_samples)
+
+
+def _load_rate_history(
+    connection: psycopg.Connection[TupleRow], config: AcquisitionConfig
+) -> dict[int, list[RateSample]]:
+    try:
+        return load_rate_samples(
+            connection, [tank.id for tank in config.tanks], DEFAULT_RATE_HISTORY_CAPACITY
+        )
+    except psycopg.Error as error:
+        logger.critical(events.DB_STARTUP_FAILED, step="rate_history", error=str(error))
+        raise StartupError(str(error)) from error
+
+
+def _log_rate_history(rate_samples: Mapping[int, Sequence[RateSample]], capacity: int) -> None:
+    logger.info(
+        events.RATE_HISTORY_LOADED,
+        tanks=[
+            {"tank_id": tank_id, "samples": len(samples)}
+            for tank_id, samples in rate_samples.items()
+        ],
+        capacity=capacity,
+    )
+    short = [tank_id for tank_id, samples in rate_samples.items() if len(samples) < capacity]
+    if short:
+        logger.warning(events.RATE_HISTORY_SHORT, tank_ids=short, capacity=capacity)
 
 
 def _refuse_identity_violations(

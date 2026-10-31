@@ -473,7 +473,7 @@ def test_events_closed_on_shutdown_carry_their_flags() -> None:
 
     closed = silo.on_shutdown()
 
-    assert flags(closed) == [
+    assert flags(closed_records(closed)) == [
         (EventKind.DISPENSE, True, True),
         (EventKind.DISPENSE, True, True),
     ]

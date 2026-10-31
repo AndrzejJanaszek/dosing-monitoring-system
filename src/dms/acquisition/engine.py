@@ -7,6 +7,7 @@ import structlog
 from dms.acquisition.temperature_logging import log_temperature_notice
 from dms.domain.collisions import RuleViolation
 from dms.domain.events import EventStatus, StartedEvent, StartQuality
+from dms.domain.rate_history import RateSampleRejected
 from dms.domain.records import (
     EventRecord,
     MeterRecord,
@@ -23,7 +24,9 @@ from dms.units import NS_PER_S
 
 GET_TIMEOUT_S = 0.5
 
-type SiloOutput = SignalChange | RuleViolation | MeterRecord | StartedEvent | EventRecord
+type SiloOutput = (
+    SignalChange | RuleViolation | RateSampleRejected | MeterRecord | StartedEvent | EventRecord
+)
 
 logger = structlog.get_logger()
 
@@ -113,6 +116,9 @@ class Engine:
             if isinstance(output, RuleViolation):
                 self._log_rule_violation(output)
                 continue
+            if isinstance(output, RateSampleRejected):
+                self._log_rate_sample_rejected(output)
+                continue
             if isinstance(output, StartedEvent):
                 self._log_started(output)
             elif isinstance(output, EventRecord):
@@ -144,6 +150,15 @@ class Engine:
             event_id=str(violation.event_id),
             other_tank_id=violation.other_tank_id,
             other_event_id=str(violation.other_event_id),
+        )
+
+    def _log_rate_sample_rejected(self, rejected: RateSampleRejected) -> None:
+        logger.warning(
+            events.RATE_HISTORY_SAMPLE_REJECTED,
+            event_id=str(rejected.event_id),
+            tank_id=rejected.tank_id,
+            mass_kg=rejected.mass_kg,
+            duration_s=rejected.duration_ns / NS_PER_S,
         )
 
     def _log_started(self, event: StartedEvent) -> None:

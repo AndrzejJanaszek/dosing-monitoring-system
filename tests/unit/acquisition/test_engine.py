@@ -216,6 +216,20 @@ def test_started_and_completed_events_are_logged_with_the_delta() -> None:
     assert (event_logs[1]["collision"], event_logs[1]["rule_violation"]) == (False, False)
 
 
+def test_clean_dispense_with_a_growing_reading_is_logged_as_a_rejected_rate_sample() -> None:
+    engine, in_queue, _ = build()
+
+    with capture_logs() as logs:
+        run_dispense(engine, in_queue, end_value_kg=520)
+
+    (rejected,) = [
+        entry for entry in logs if entry["event"] == events.RATE_HISTORY_SAMPLE_REJECTED
+    ]
+    assert rejected["log_level"] == "warning"
+    assert (rejected["tank_id"], rejected["mass_kg"], rejected["duration_s"]) == (1, -20, 4.5)
+    assert rejected["event_id"] == "00000000-0000-0000-0000-000000000001"
+
+
 def test_incomplete_event_is_logged_as_an_error_with_both_qualities() -> None:
     engine, in_queue, _ = build()
 

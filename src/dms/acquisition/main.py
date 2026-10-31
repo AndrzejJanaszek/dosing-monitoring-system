@@ -59,9 +59,10 @@ def main() -> int:
         logger.critical(events.DB_STARTUP_FAILED, step="connect", error=str(error))
         return EXIT_FAILURE
     try:
-        run_id = run_startup_sequence(connection, acquisition_config)
+        started_run = run_startup_sequence(connection, acquisition_config)
     except StartupError:
         return EXIT_FAILURE
+    run_id = started_run.run_id
 
     app = build_acquisition(
         config=acquisition_config,
@@ -69,6 +70,7 @@ def main() -> int:
         connection=connection,
         reconnect=lambda: psycopg.connect(conninfo, autocommit=True),
         run_id=run_id,
+        rate_samples=started_run.rate_samples,
     )
     signal.signal(signal.SIGTERM, partial(_handle_signal, app))
     signal.signal(signal.SIGINT, partial(_handle_signal, app))
