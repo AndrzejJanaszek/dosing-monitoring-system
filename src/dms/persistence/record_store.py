@@ -7,6 +7,7 @@ from typing import NamedTuple, Protocol
 import psycopg
 from psycopg import errors
 from psycopg.rows import TupleRow
+from psycopg.types.json import Jsonb
 
 from dms.domain.events import ClosedEvent, StartedEvent
 from dms.domain.records import (
@@ -58,6 +59,16 @@ UPSERT_EVENT_END_SQL = (
     " duration_ms = EXCLUDED.duration_ms,"
     " rule_violation = EXCLUDED.rule_violation,"
     " collision = EXCLUDED.collision"
+)
+
+UPSERT_EVENT_ESTIMATE_SQL = (
+    "INSERT INTO dms.event_estimate"
+    " (event_id, method, params, value_kg, missing_reason, computed_at)"
+    " VALUES (%s, %s, %s, %s, %s, now())"
+    " ON CONFLICT (event_id, method, params) DO UPDATE SET"
+    " value_kg = EXCLUDED.value_kg,"
+    " missing_reason = EXCLUDED.missing_reason,"
+    " computed_at = EXCLUDED.computed_at"
 )
 
 CLOSE_REJECTED_EVENT_SQL = (
@@ -154,7 +165,19 @@ class PostgresRecordStore:
         start_rows = [
             self._start_row(record) for record in records if isinstance(record, StartedEvent)
         ]
-        end_rows = [self._end_row(record) for record in records if isinstance(record, EventRecord)]
+        event_records = [record for record in records if isinstance(record, EventRecord)]
+        end_rows = [self._end_row(record) for record in event_records]
+        estimate_rows = [
+            (
+                record.event.event_id,
+                estimate.method,
+                Jsonb(dict(estimate.params)),
+                estimate.value_kg,
+                estimate.missing_reason,
+            )
+            for record in event_records
+            for estimate in record.estimates
+        ]
         with (
             _store_errors_translated(),
             self._connection.transaction(),
@@ -169,6 +192,7 @@ class PostgresRecordStore:
             )
             self._execute_group(cursor, INSERT_EVENT_START_SQL, start_rows)
             self._execute_group(cursor, UPSERT_EVENT_END_SQL, end_rows)
+            self._execute_group(cursor, UPSERT_EVENT_ESTIMATE_SQL, estimate_rows)
         return WriteResult(
             readings_inserted,
             len(meter_rows) + len(temperature_rows) + len(unknown_sensor_rows),

@@ -7,7 +7,7 @@ import structlog
 from psycopg.rows import TupleRow
 
 from dms.config.models import AcquisitionConfig
-from dms.domain.rate_history import DEFAULT_RATE_HISTORY_CAPACITY, RateSample
+from dms.domain.rate_history import RateSample
 from dms.logs import events
 from dms.persistence.catalog import (
     close_crashed_events,
@@ -94,7 +94,7 @@ def run_startup_sequence(
                 for item in crashed_events
             ],
         )
-    _log_rate_history(rate_samples, DEFAULT_RATE_HISTORY_CAPACITY)
+    _log_rate_history(rate_samples, config.rate_history_capacity)
     return StartedRun(run_id=run_id, rate_samples=rate_samples)
 
 
@@ -103,7 +103,7 @@ def _load_rate_history(
 ) -> dict[int, list[RateSample]]:
     try:
         return load_rate_samples(
-            connection, [tank.id for tank in config.tanks], DEFAULT_RATE_HISTORY_CAPACITY
+            connection, [tank.id for tank in config.tanks], config.rate_history_capacity
         )
     except psycopg.Error as error:
         logger.critical(events.DB_STARTUP_FAILED, step="rate_history", error=str(error))
