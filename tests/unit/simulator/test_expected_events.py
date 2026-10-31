@@ -3,7 +3,7 @@ from dms.simulator.expected_events import ExpectedEvent, expected_events
 from dms.simulator.layout import PlantLayout, SiloLayout
 from dms.simulator.timeline import MeterSample, PinsSample, Sample
 from dms.units import NS_PER_S
-from tests.unit.simulator.builders import dispense, scenario_with, tank
+from tests.unit.simulator.builders import dispense, scenario_with, tank, two_tank_layout
 
 MAX_AGE_NS = NS_PER_S
 
@@ -47,6 +47,8 @@ def test_completed_event_uses_the_latest_meter_samples_before_each_edge() -> Non
             end_value_kg=700,
             start_quality=StartQuality.FRESH,
             end_quality=EndQuality.FRESH,
+            collision=False,
+            rule_violation=False,
         )
     ]
 
@@ -159,6 +161,8 @@ def test_active_signal_in_the_first_sample_gives_an_unknown_start_event() -> Non
         end_value_kg=700,
         start_quality=StartQuality.UNKNOWN,
         end_quality=EndQuality.FRESH,
+        collision=False,
+        rule_violation=False,
     )
 
 
@@ -226,3 +230,98 @@ def test_meters_of_different_silos_are_kept_apart() -> None:
     )
 
     assert (event.tank_id, event.start_value_kg) == (2, 5000)
+
+
+def flags_of(events: list[ExpectedEvent]) -> list[tuple[str, int, bool, bool]]:
+    return [(item.kind, item.tank_id, item.collision, item.rule_violation) for item in events]
+
+
+def test_overlapping_dispense_and_refill_are_collisions() -> None:
+    samples: list[Sample] = [
+        pins(0.0),
+        pins(1.0, refill_active=True),
+        pins(2.0, dispense_active=True, refill_active=True),
+        pins(3.0, refill_active=True),
+        pins(4.0),
+    ]
+
+    assert flags_of(events_from(samples)) == [
+        ("dispense", 1, True, False),
+        ("refill", 1, True, False),
+    ]
+
+
+def test_refill_ending_at_the_start_of_a_dispense_is_no_collision() -> None:
+    samples: list[Sample] = [
+        pins(0.0),
+        pins(1.0, refill_active=True),
+        pins(2.0, dispense_active=True),
+        pins(3.0),
+    ]
+
+    assert flags_of(events_from(samples)) == [
+        ("refill", 1, False, False),
+        ("dispense", 1, False, False),
+    ]
+
+
+def test_event_with_an_unknown_start_collides_with_a_later_refill() -> None:
+    samples: list[Sample] = [
+        pins(5.0, dispense_active=True),
+        pins(6.0, dispense_active=True, refill_active=True),
+        pins(7.0, refill_active=True),
+        pins(8.0),
+    ]
+
+    events = events_from(samples, start_ns=0)
+
+    assert flags_of(events) == [
+        ("dispense", 1, True, False),
+        ("refill", 1, True, False),
+    ]
+
+
+def two_tank_pins(at_s: float, *dispensing_pins: int) -> PinsSample:
+    levels = tuple((pin, 0 if pin in dispensing_pins else 1) for pin in (4, 5, 6, 7))
+    return PinsSample(round(at_s * NS_PER_S), "arduino", levels)
+
+
+def test_same_type_on_both_tanks_of_a_silo_is_a_rule_violation() -> None:
+    samples: list[Sample] = [
+        two_tank_pins(0.0),
+        two_tank_pins(1.0, 4),
+        two_tank_pins(2.0, 4, 6),
+        two_tank_pins(3.0),
+    ]
+
+    events = expected_events(
+        scenario_with(dispense(), layout=two_tank_layout()),
+        samples,
+        max_reading_age_ns=MAX_AGE_NS,
+    )
+
+    assert flags_of(events) == [
+        ("dispense", 1, True, True),
+        ("dispense", 2, True, True),
+    ]
+
+
+def test_events_on_different_silos_never_collide() -> None:
+    layout = PlantLayout(
+        (SiloLayout(id=1, tanks=(tank(1, 4, 5),)), SiloLayout(id=2, tanks=(tank(2, 6, 7),)))
+    )
+    samples: list[Sample] = [
+        two_tank_pins(0.0),
+        two_tank_pins(1.0, 4),
+        two_tank_pins(2.0, 4, 6),
+        two_tank_pins(3.0),
+    ]
+
+    events = expected_events(
+        scenario_with(dispense(), layout=layout), samples, max_reading_age_ns=MAX_AGE_NS
+    )
+
+    assert flags_of(events) == [
+        ("dispense", 1, False, False),
+        ("dispense", 2, False, False),
+    ]

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
@@ -6,6 +7,7 @@ from psycopg import errors
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import TupleRow
 
+from dms.persistence.catalog import start_run
 from dms.persistence.migrate import (
     ChecksumMismatchError,
     DatabaseAheadError,
@@ -42,7 +44,7 @@ def test_migration_on_empty_database_creates_tables_and_records_versions(
     with owner_connection(fresh_database) as connection:
         applied = apply_migrations(connection, load_migrations())
 
-        assert [migration.version for migration in applied] == [1, 2, 3, 4, 5, 6]
+        assert [migration.version for migration in applied] == [1, 2, 3, 4, 5, 6, 7]
         assert table_names(connection) == {
             "schema_migration",
             "silo",
@@ -55,7 +57,7 @@ def test_migration_on_empty_database_creates_tables_and_records_versions(
             "meter_reading",
         }
         assert database_schema_version(connection) == package_schema_version()
-        assert str(package_schema_version()) == "1.5.0"
+        assert str(package_schema_version()) == "1.6.0"
 
 
 def test_second_run_changes_nothing(fresh_database: str) -> None:
@@ -64,7 +66,7 @@ def test_second_run_changes_nothing(fresh_database: str) -> None:
 
         assert apply_migrations(connection, load_migrations()) == []
         row = connection.execute("SELECT count(*) FROM dms.schema_migration").fetchone()
-        assert row == (6,)
+        assert row == (7,)
 
 
 def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str) -> None:
@@ -83,6 +85,7 @@ def test_changed_checksum_is_refused_and_database_untouched(fresh_database: str)
             "0004_event_recovery.sql",
             "0005_temperature_sensor.sql",
             "0006_temperature_reading.sql",
+            "0007_event_flags.sql",
         ]
         assert "meter_reading" not in table_names(connection)
 
@@ -91,13 +94,13 @@ def test_database_ahead_of_package_is_refused(fresh_database: str) -> None:
     with owner_connection(fresh_database) as connection:
         apply_migrations(connection, load_migrations())
         connection.execute(
-            "INSERT INTO dms.schema_migration VALUES (7, 'future', 'x', '1.6.0', now())"
+            "INSERT INTO dms.schema_migration VALUES (8, 'future', 'x', '1.7.0', now())"
         )
 
         with pytest.raises(DatabaseAheadError) as raised:
             apply_migrations(connection, load_migrations())
 
-        assert raised.value.migrations == ["0007_future"]
+        assert raised.value.migrations == ["0008_future"]
 
 
 def test_failing_migration_leaves_no_trace(fresh_database: str, tmp_path: Path) -> None:
@@ -303,3 +306,64 @@ def test_command_applies_migrations_with_owner_role(
 
     with psycopg.connect(fresh_database) as connection:
         assert database_schema_version(connection) == package_schema_version()
+
+
+INSERT_EVENT_SQL = (
+    "INSERT INTO dms.tank_event (id, tank_id, run_id, type, origin, status, start_at,"
+    " start_quality, end_at, end_quality, rule_violation, collision)"
+    " VALUES (gen_random_uuid(), 1, %s, 'dispense', 'signal', %s, now(), 'unknown', %s, %s,"
+    " %s, %s)"
+)
+
+
+def seed_tank_and_run(connection: psycopg.Connection[TupleRow]) -> int:
+    connection.execute("INSERT INTO dms.silo VALUES (1, 'Silos 1', true)")
+    connection.execute(
+        "INSERT INTO dms.tank (id, name, silo_id, active) VALUES (1, 'Zbiornik 1', 1, true)"
+    )
+    return start_run(connection, "1.0.0", {})
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [(False, None), (None, False), (False, False)],
+    ids=["rule-violation-only", "collision-only", "both-flags"],
+)
+def test_event_in_progress_cannot_have_flags(
+    migrated_connection: psycopg.Connection[TupleRow], flags: tuple[bool | None, bool | None]
+) -> None:
+    run_id = seed_tank_and_run(migrated_connection)
+
+    with pytest.raises(errors.CheckViolation):
+        migrated_connection.execute(INSERT_EVENT_SQL, [run_id, "in_progress", None, None, *flags])
+
+
+def test_closed_event_may_have_flags_or_leave_them_unknown(
+    migrated_connection: psycopg.Connection[TupleRow],
+) -> None:
+    run_id = seed_tank_and_run(migrated_connection)
+
+    for flags in [(True, True), (None, None)]:
+        migrated_connection.execute(
+            INSERT_EVENT_SQL, [run_id, "incomplete", datetime.now(UTC), "signal_lost", *flags]
+        )
+
+
+def test_events_stored_before_the_flags_migration_have_unknown_flags(
+    fresh_database: str,
+) -> None:
+    migrations = load_migrations()
+    with owner_connection(fresh_database) as connection:
+        apply_migrations(connection, migrations[:6])
+        run_id = seed_tank_and_run(connection)
+        connection.execute(
+            "INSERT INTO dms.tank_event (id, tank_id, run_id, type, origin, status, start_at,"
+            " start_quality, end_at, end_quality) VALUES (gen_random_uuid(), 1, %s, 'dispense',"
+            " 'signal', 'incomplete', now(), 'unknown', now(), 'signal_lost')",
+            [run_id],
+        )
+
+        apply_migrations(connection, migrations)
+
+        rows = connection.execute("SELECT rule_violation, collision FROM dms.tank_event")
+        assert rows.fetchall() == [(None, None)]

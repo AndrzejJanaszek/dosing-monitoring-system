@@ -62,6 +62,7 @@ class ScenarioData:
     start_masses_kg: Mapping[int, int] | None
     events: tuple[SimulatedTankEvent, ...]
     duration_s: float | None = None
+    allow_rule_violations: bool = False
 
     @property
     def duration_ns(self) -> int:

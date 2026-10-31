@@ -98,6 +98,16 @@ def _scenario(
     )
 
 
+def _rule_violation(name: str, *events: SimulatedTankEvent) -> Scenario:
+    return Scenario(
+        name=name,
+        layout=TWO_TANKS,
+        start_masses_kg=None,
+        events=tuple(events),
+        allow_rule_violations=True,
+    )
+
+
 RELATIONS = (
     Relation("dispense-before-refill", 100, (10,)),
     Relation("dispense-after-refill", 10, (340,)),
@@ -165,6 +175,18 @@ def _two_tank_series() -> list[Scenario]:
             _dispense(1, 50),
             _dispense(2, 120),
             _dispense(1, 190),
+        ),
+    ]
+
+
+def _rule_violations() -> list[Scenario]:
+    return [
+        _rule_violation("dispense-both-tanks-concurrent", _dispense(1, 10), _dispense(2, 20)),
+        _rule_violation(
+            "refill-with-concurrent-dispenses-both-tanks",
+            _refill(1, 10),
+            _dispense(1, 50),
+            _dispense(2, 60),
         ),
     ]
 
@@ -307,6 +329,7 @@ SCENARIOS = build_catalog(
         *dispense_refill_relations(ONE_TANK, 1, 1, ""),
         *dispense_refill_relations(TWO_TANKS, 1, 2, OTHER_TANK_SUFFIX),
         *_two_tank_series(),
+        *_rule_violations(),
         *_two_silos(),
         *_polarity_and_sensors(),
         *_temperatures(),

@@ -23,6 +23,9 @@ class EndQuality(StrEnum):
     RECORD_REJECTED = "record_rejected"
 
 
+SIGNAL_EDGE_END_QUALITIES = frozenset({EndQuality.FRESH, EndQuality.STALE_READING})
+
+
 class EventStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -51,6 +54,14 @@ class ClosedEvent:
     duration_ns: int | None
     start_quality: StartQuality
     end_quality: EndQuality
+
+    @property
+    def started_on_signal_edge(self) -> bool:
+        return self.start_quality is not StartQuality.UNKNOWN
+
+    @property
+    def ended_on_signal_edge(self) -> bool:
+        return self.end_quality in SIGNAL_EDGE_END_QUALITIES
 
     @property
     def status(self) -> EventStatus:

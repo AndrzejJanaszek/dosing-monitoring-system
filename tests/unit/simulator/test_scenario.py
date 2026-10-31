@@ -175,6 +175,29 @@ def test_dispenses_on_different_silos_may_overlap() -> None:
     )
 
 
+def test_same_type_on_both_tanks_of_a_silo_is_legal_when_rule_violations_are_allowed() -> None:
+    Scenario(
+        name="test",
+        layout=two_tank_layout(),
+        start_masses_kg=None,
+        events=(dispense(10, 40), dispense(20, 50, tank_id=2)),
+        allow_rule_violations=True,
+    )
+
+
+def test_allowed_rule_violations_still_refuse_overlapping_events_on_one_tank() -> None:
+    with pytest.raises(ScenarioError) as raised:
+        Scenario(
+            name="test",
+            layout=two_tank_layout(),
+            start_masses_kg=None,
+            events=(dispense(10, 40), dispense(30, 60)),
+            allow_rule_violations=True,
+        )
+
+    assert raised.value.errors == ["events[1]: dispense closer than 2 s after another on tank 1"]
+
+
 def test_event_kinds_and_signs() -> None:
     assert (Dispense.kind, Dispense.sign) == ("dispense", -1)
     assert (Refill.kind, Refill.sign) == ("refill", 1)

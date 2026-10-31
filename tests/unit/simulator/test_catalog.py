@@ -67,7 +67,7 @@ def relation_of(scenario: Scenario) -> tuple[str, ...]:
 
 
 def test_catalog_has_expected_size() -> None:
-    assert len(SCENARIOS) == 40
+    assert len(SCENARIOS) == 42
 
 
 @pytest.mark.parametrize("name", EXPECTED_RELATIONS)
@@ -99,6 +99,20 @@ def test_two_silo_scenarios_touch_both_silos(name: str) -> None:
 
     assert silos == {1, 2}
     assert scenario.layout is TWO_SILOS
+
+
+@pytest.mark.parametrize(
+    "name", ["dispense-both-tanks-concurrent", "refill-with-concurrent-dispenses-both-tanks"]
+)
+def test_rule_violation_scenarios_overlap_dispenses_on_both_tanks(name: str) -> None:
+    scenario = SCENARIOS[name]
+    first, second = (event for event in scenario.events if isinstance(event, Dispense))
+
+    assert scenario.allow_rule_violations
+    assert scenario.layout is TWO_TANKS
+    assert {first.tank_id, second.tank_id} == {1, 2}
+    assert first.start_s < second.end_s
+    assert second.start_s < first.end_s
 
 
 def test_special_layouts_are_used() -> None:

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from dms.simulator.encoders import METER_ENCODERS
 from dms.simulator.errors import ScenarioError
-from dms.simulator.layout import PlantLayout, SiloLayout
+from dms.simulator.layout import SiloLayout
 from dms.simulator.plant_state import indication_kg, silo_mass_kg
 from dms.simulator.scenario_model import ScenarioData, SimulatedTankEvent
 from dms.units import NS_PER_S
@@ -47,7 +47,7 @@ def _event_errors(scenario: Scenario) -> list[str]:
         errors.extend(event_errors)
         if not event_errors:
             valid.append((index, event))
-    return [*errors, *_gap_errors(scenario.layout, valid)]
+    return [*errors, *_gap_errors(scenario, valid)]
 
 
 def _single_event_errors(index: int, event: SimulatedTankEvent, tank_ids: set[int]) -> list[str]:
@@ -74,7 +74,8 @@ def _single_event_errors(index: int, event: SimulatedTankEvent, tank_ids: set[in
     return errors
 
 
-def _gap_errors(layout: PlantLayout, events: list[tuple[int, SimulatedTankEvent]]) -> list[str]:
+def _gap_errors(scenario: Scenario, events: list[tuple[int, SimulatedTankEvent]]) -> list[str]:
+    layout = scenario.layout
     errors: list[str] = []
     ordered = sorted(events, key=lambda item: item[1].start_s)
     for (_, earlier), (later_index, later) in itertools.combinations(ordered, 2):
@@ -90,7 +91,7 @@ def _gap_errors(layout: PlantLayout, events: list[tuple[int, SimulatedTankEvent]
                 f"events[{later_index}]: {later.kind} closer than {MIN_GAP_S:g} s"
                 f" after another on tank {later.tank_id}"
             )
-        elif same_silo:
+        elif same_silo and not scenario.allow_rule_violations:
             errors.append(
                 f"events[{later_index}]: {later.kind} closer than {MIN_GAP_S:g} s"
                 " after another on the same silo"

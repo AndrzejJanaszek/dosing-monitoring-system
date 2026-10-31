@@ -11,7 +11,7 @@ import structlog
 
 from dms.clock import Clock, SystemClock
 from dms.domain.events import ClosedEvent
-from dms.domain.records import WriterRecord
+from dms.domain.records import EventRecord, WriterRecord
 from dms.logs import events
 from dms.persistence.record_store import (
     DataStoreError,
@@ -41,6 +41,16 @@ class WriterAbandonedError(Exception):
 
 
 def _record_fields(record: WriterRecord) -> dict[str, Any]:
+    if isinstance(record, EventRecord):
+        return {
+            **_dataclass_fields(record.event),
+            "collision": record.collision,
+            "rule_violation": record.rule_violation,
+        }
+    return _dataclass_fields(record)
+
+
+def _dataclass_fields(record: WriterRecord | ClosedEvent) -> dict[str, Any]:
     fields = {field.name: getattr(record, field.name) for field in dataclasses.fields(record)}
     return {
         name: str(value) if isinstance(value, UUID) else value for name, value in fields.items()
@@ -151,7 +161,9 @@ class Writer:
             return WriteResult(0, 0)
 
     def _reject(self, item: WriterRecord, error: DataStoreError) -> None:
-        fallback = self._close_rejected_event(item) if isinstance(item, ClosedEvent) else None
+        fallback = (
+            self._close_rejected_event(item.event) if isinstance(item, EventRecord) else None
+        )
 
         fields: dict[str, Any] = {
             "record_type": type(item).__name__,

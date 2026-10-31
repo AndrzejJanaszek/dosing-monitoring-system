@@ -11,10 +11,10 @@ from dms.acquisition.app import board_wiring, build_silos, meter_wiring
 from dms.acquisition.engine import Engine
 from dms.acquisition.serial.adapter import FrameHandler
 from dms.acquisition.serial.framing import Framer
-from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import WriterRecord
+from dms.domain.events import EndQuality, EventKind, StartedEvent, StartQuality
+from dms.domain.records import EventRecord, WriterRecord
 from dms.messages import EngineMessage, Tick
-from dms.simulator.catalog import SCENARIOS
+from dms.simulator.catalog import OTHER_TANK_SUFFIX, RELATIONS, SCENARIOS
 from dms.simulator.dms_config import acquisition_config
 from dms.simulator.encoders import encode_banner, encode_sample
 from dms.simulator.expected_events import ExpectedEvent, expected_events
@@ -82,11 +82,12 @@ def run_pipeline(
     return records
 
 
-def closed_events(records: list[WriterRecord]) -> list[ClosedEvent]:
-    return [record for record in records if isinstance(record, ClosedEvent)]
+def closed_events(records: list[WriterRecord]) -> list[EventRecord]:
+    return [record for record in records if isinstance(record, EventRecord)]
 
 
-def as_expected(event: ClosedEvent) -> ExpectedEvent:
+def as_expected(record: EventRecord) -> ExpectedEvent:
+    event = record.event
     return ExpectedEvent(
         tank_id=event.tank_id,
         kind=event.kind,
@@ -96,6 +97,8 @@ def as_expected(event: ClosedEvent) -> ExpectedEvent:
         end_value_kg=event.end_value_kg,
         start_quality=event.start_quality,
         end_quality=event.end_quality,
+        collision=record.collision,
+        rule_violation=record.rule_violation,
     )
 
 
@@ -127,11 +130,12 @@ def assert_every_close_follows_its_start(records: list[WriterRecord]) -> None:
         if isinstance(record, StartedEvent):
             assert record.event_id not in started
             started[record.event_id] = record
-        elif isinstance(record, ClosedEvent):
-            opened = started[record.event_id]
-            assert (opened.tank_id, opened.kind) == (record.tank_id, record.kind)
-            assert opened.start_wall_ns == record.start_wall_ns
-            assert opened.start_value_kg == record.start_value_kg
+        elif isinstance(record, EventRecord):
+            event = record.event
+            opened = started[event.event_id]
+            assert (opened.tank_id, opened.kind) == (event.tank_id, event.kind)
+            assert opened.start_wall_ns == event.start_wall_ns
+            assert opened.start_value_kg == event.start_value_kg
 
 
 def without_meter_samples(samples: list[Sample], meter_id: str, around_ns: int) -> list[Sample]:
@@ -167,6 +171,92 @@ def test_events_of_every_catalogue_scenario_match_the_oracle(
         for r in records
         if isinstance(r, StartedEvent) and r.start_quality is StartQuality.UNKNOWN
     ]
+
+
+COLLISION_FREE_RELATIONS = {
+    "dispense-before-refill",
+    "dispense-after-refill",
+    "dispense-meets-refill",
+    "refill-meets-dispense",
+}
+RELATION_NAMES = {relation.name for relation in RELATIONS}
+RELATION_SCENARIOS = [
+    name for name in SCENARIOS if name.removesuffix(OTHER_TANK_SUFFIX) in RELATION_NAMES
+]
+
+
+def flags_by_kind(events: list[ExpectedEvent]) -> set[tuple[EventKind, bool, bool]]:
+    return {(event.kind, event.collision, event.rule_violation) for event in events}
+
+
+@pytest.mark.parametrize("name", RELATION_SCENARIOS)
+def test_dispense_and_refill_collide_only_when_they_overlap(name: str, tmp_path: Path) -> None:
+    scenario = SCENARIOS[name]
+    samples = list(scenario_samples(scenario))
+
+    events = system_events(run_pipeline(scenario, samples, tmp_path))
+
+    collision = name.removesuffix(OTHER_TANK_SUFFIX) not in COLLISION_FREE_RELATIONS
+    assert flags_by_kind(events) == {
+        (EventKind.DISPENSE, collision, False),
+        (EventKind.REFILL, collision, False),
+    }
+
+
+def test_dispenses_on_both_tanks_flag_both_events_as_rule_violations(tmp_path: Path) -> None:
+    scenario = SCENARIOS["dispense-both-tanks-concurrent"]
+    samples = list(scenario_samples(scenario))
+
+    events = system_events(run_pipeline(scenario, samples, tmp_path))
+
+    assert [(event.tank_id, event.collision, event.rule_violation) for event in events] == [
+        (1, True, True),
+        (2, True, True),
+    ]
+
+
+def test_refill_with_concurrent_dispenses_collides_without_its_own_rule_violation(
+    tmp_path: Path,
+) -> None:
+    scenario = SCENARIOS["refill-with-concurrent-dispenses-both-tanks"]
+    samples = list(scenario_samples(scenario))
+
+    events = system_events(run_pipeline(scenario, samples, tmp_path))
+
+    assert sorted((event.kind, event.tank_id, event.rule_violation) for event in events) == [
+        (EventKind.DISPENSE, 1, True),
+        (EventKind.DISPENSE, 2, True),
+        (EventKind.REFILL, 1, False),
+    ]
+    assert all(event.collision for event in events)
+
+
+def test_refill_overlapping_a_dispense_with_an_unknown_start_is_a_collision(
+    tmp_path: Path,
+) -> None:
+    scenario = SCENARIOS["dispense-front-refill"]
+    offset_ns = 95 * NS_PER_S
+    samples = list(
+        itertools.takewhile(
+            lambda sample: sample.at_ns <= scenario.duration_ns - offset_ns,
+            samples_from(scenario, 0, lambda t_ns: t_ns + offset_ns),
+        )
+    )
+
+    records = run_pipeline(scenario, samples, tmp_path)
+
+    dispense, refill = system_events(records)
+    assert system_events(records) == oracle_events(scenario, samples)
+    assert (dispense.kind, dispense.start_quality, dispense.collision) == (
+        EventKind.DISPENSE,
+        StartQuality.UNKNOWN,
+        True,
+    )
+    assert (refill.kind, refill.start_quality, refill.collision) == (
+        EventKind.REFILL,
+        StartQuality.FRESH,
+        True,
+    )
 
 
 def test_service_started_in_the_middle_of_an_event_gives_an_unknown_start_event(
@@ -279,6 +369,8 @@ def test_lost_signals_in_the_middle_of_an_event_end_it_and_orphan_the_rest(
         end_value_kg=None,
         start_quality=StartQuality.FRESH,
         end_quality=EndQuality.SIGNAL_LOST,
+        collision=False,
+        rule_violation=False,
     )
     assert orphaned == ExpectedEvent(
         tank_id=1,
@@ -289,5 +381,7 @@ def test_lost_signals_in_the_middle_of_an_event_end_it_and_orphan_the_rest(
         end_value_kg=clean.end_value_kg,
         start_quality=StartQuality.UNKNOWN,
         end_quality=EndQuality.FRESH,
+        collision=False,
+        rule_violation=False,
     )
     assert_every_close_follows_its_start(records)

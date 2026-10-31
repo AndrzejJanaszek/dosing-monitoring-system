@@ -1,8 +1,9 @@
 from collections.abc import Sequence
 from uuid import UUID
 
+from dms.domain.collisions import RuleViolation
 from dms.domain.events import ClosedEvent, EndQuality, EventKind, StartedEvent, StartQuality
-from dms.domain.records import MeterRecord
+from dms.domain.records import EventRecord, MeterRecord
 from dms.domain.tank import SignalChange
 from dms.messages import MeterReading, SignalStates, TankSignals, Tick
 from dms.units import NS_PER_S
@@ -124,8 +125,8 @@ def signals_at(mono_s: float, *, dispense: bool = False, refill: bool = False) -
     )
 
 
-def only_events(outputs: Sequence[object]) -> list[StartedEvent | ClosedEvent]:
-    return [item for item in outputs if isinstance(item, StartedEvent | ClosedEvent)]
+def only_events(outputs: Sequence[object]) -> list[StartedEvent | EventRecord]:
+    return [item for item in outputs if isinstance(item, StartedEvent | EventRecord)]
 
 
 def test_event_value_is_the_latest_fresh_reading_not_after_the_snapshot() -> None:
@@ -213,17 +214,21 @@ def test_lost_signals_close_the_open_event_at_the_last_fresh_snapshot() -> None:
     closed = silo.on_tick(tick(11.5))
 
     assert closed == [
-        ClosedEvent(
-            event_id=UUID(int=1),
-            tank_id=1,
-            kind=EventKind.DISPENSE,
-            start_wall_ns=1_010 * NS_PER_S,
-            start_value_kg=500,
-            end_wall_ns=1_000 * NS_PER_S + 10_250_000_000,
-            end_value_kg=None,
-            duration_ns=250_000_000,
-            start_quality=StartQuality.FRESH,
-            end_quality=EndQuality.SIGNAL_LOST,
+        EventRecord(
+            event=ClosedEvent(
+                event_id=UUID(int=1),
+                tank_id=1,
+                kind=EventKind.DISPENSE,
+                start_wall_ns=1_010 * NS_PER_S,
+                start_value_kg=500,
+                end_wall_ns=1_000 * NS_PER_S + 10_250_000_000,
+                end_value_kg=None,
+                duration_ns=250_000_000,
+                start_quality=StartQuality.FRESH,
+                end_quality=EndQuality.SIGNAL_LOST,
+            ),
+            collision=False,
+            rule_violation=False,
         )
     ]
     assert silo.signals_stale_since_mono_ns == round(11.25 * NS_PER_S)
@@ -246,7 +251,7 @@ def test_lost_signals_are_detected_even_when_the_meter_is_silent() -> None:
 
     closed = silo.on_tick(tick(20.0))
 
-    assert [item.end_quality for item in closed if isinstance(item, ClosedEvent)] == [
+    assert [item.event.end_quality for item in closed if isinstance(item, EventRecord)] == [
         "signal_lost"
     ]
 
@@ -309,17 +314,21 @@ def test_shutdown_closes_the_open_event_at_the_last_snapshot() -> None:
     closed = silo.on_shutdown()
 
     assert closed == [
-        ClosedEvent(
-            event_id=UUID(int=1),
-            tank_id=1,
-            kind=EventKind.DISPENSE,
-            start_wall_ns=1_010 * NS_PER_S,
-            start_value_kg=500,
-            end_wall_ns=1_000 * NS_PER_S + 10_250_000_000,
-            end_value_kg=None,
-            duration_ns=250_000_000,
-            start_quality=StartQuality.FRESH,
-            end_quality=EndQuality.SERVICE_STOPPED,
+        EventRecord(
+            event=ClosedEvent(
+                event_id=UUID(int=1),
+                tank_id=1,
+                kind=EventKind.DISPENSE,
+                start_wall_ns=1_010 * NS_PER_S,
+                start_value_kg=500,
+                end_wall_ns=1_000 * NS_PER_S + 10_250_000_000,
+                end_value_kg=None,
+                duration_ns=250_000_000,
+                start_quality=StartQuality.FRESH,
+                end_quality=EndQuality.SERVICE_STOPPED,
+            ),
+            collision=False,
+            rule_violation=False,
         )
     ]
 
@@ -339,3 +348,144 @@ def test_shutdown_after_lost_signals_closes_nothing() -> None:
 
 def test_silo_without_tanks_closes_nothing_on_shutdown() -> None:
     assert build_silo(1).on_shutdown() == []
+
+
+def tanks_at(mono_s: float, *states: tuple[bool, bool]) -> SignalStates:
+    mono_ns = round(mono_s * NS_PER_S)
+    return SignalStates(
+        tuple(
+            TankSignals(tank_id, dispense=dispense, refill=refill)
+            for tank_id, (dispense, refill) in enumerate(states, start=1)
+        ),
+        1_000 * NS_PER_S + mono_ns,
+        mono_ns,
+    )
+
+
+IDLE = (False, False)
+DISPENSING = (True, False)
+REFILLING = (False, True)
+
+
+def closed_records(outputs: Sequence[object]) -> list[EventRecord]:
+    return [item for item in outputs if isinstance(item, EventRecord)]
+
+
+def flags(records: Sequence[EventRecord]) -> list[tuple[EventKind, bool, bool]]:
+    return [(item.event.kind, item.collision, item.rule_violation) for item in records]
+
+
+def test_refill_ending_when_a_dispense_starts_on_the_same_tank_is_no_collision() -> None:
+    silo = build_silo(1, tank_ids=(1,))
+    silo.on_signals(tanks_at(1.0, IDLE))
+    silo.on_signals(tanks_at(2.0, REFILLING))
+    silo.on_signals(tanks_at(3.0, DISPENSING))
+
+    outputs = silo.on_signals(tanks_at(4.0, IDLE))
+
+    assert flags(closed_records(outputs)) == [(EventKind.DISPENSE, False, False)]
+
+
+def test_end_on_a_higher_tank_and_start_on_a_lower_one_in_one_frame_is_no_collision() -> None:
+    silo = build_silo(1, tank_ids=(1, 2))
+    silo.on_signals(tanks_at(1.0, IDLE, IDLE))
+    silo.on_signals(tanks_at(2.0, IDLE, REFILLING))
+    first = silo.on_signals(tanks_at(3.0, DISPENSING, IDLE))
+
+    second = silo.on_signals(tanks_at(4.0, IDLE, IDLE))
+
+    assert flags(closed_records([*first, *second])) == [
+        (EventKind.REFILL, False, False),
+        (EventKind.DISPENSE, False, False),
+    ]
+
+
+def test_closed_events_come_before_started_events_of_the_same_frame() -> None:
+    silo = build_silo(1, tank_ids=(1,))
+    silo.on_signals(tanks_at(1.0, IDLE))
+    silo.on_signals(tanks_at(2.0, REFILLING))
+
+    outputs = silo.on_signals(tanks_at(3.0, DISPENSING))
+
+    assert [type(item) for item in outputs if not isinstance(item, SignalChange)] == [
+        EventRecord,
+        StartedEvent,
+    ]
+
+
+def test_dispense_inside_a_refill_flags_both_as_collisions() -> None:
+    silo = build_silo(1, tank_ids=(1, 2))
+    silo.on_signals(tanks_at(1.0, IDLE, IDLE))
+    silo.on_signals(tanks_at(2.0, IDLE, REFILLING))
+    silo.on_signals(tanks_at(3.0, DISPENSING, REFILLING))
+    dispense = silo.on_signals(tanks_at(4.0, IDLE, REFILLING))
+
+    refill = silo.on_signals(tanks_at(5.0, IDLE, IDLE))
+
+    assert flags(closed_records([*dispense, *refill])) == [
+        (EventKind.DISPENSE, True, False),
+        (EventKind.REFILL, True, False),
+    ]
+
+
+def test_dispenses_on_both_tanks_report_the_violation_and_flag_both_events() -> None:
+    silo = build_silo(2, tank_ids=(1, 2))
+    silo.on_signals(tanks_at(1.0, IDLE, IDLE))
+    silo.on_signals(tanks_at(2.0, DISPENSING, IDLE))
+
+    started = silo.on_signals(tanks_at(3.0, DISPENSING, DISPENSING))
+    closed = silo.on_signals(tanks_at(4.0, IDLE, IDLE))
+
+    assert [item for item in started if isinstance(item, RuleViolation)] == [
+        RuleViolation(
+            silo_id=2,
+            kind=EventKind.DISPENSE,
+            event_id=UUID(int=2),
+            tank_id=2,
+            other_event_id=UUID(int=1),
+            other_tank_id=1,
+        )
+    ]
+    assert flags(closed_records(closed)) == [
+        (EventKind.DISPENSE, True, True),
+        (EventKind.DISPENSE, True, True),
+    ]
+
+
+def test_events_closed_by_lost_signals_carry_their_flags() -> None:
+    silo = build_silo(1, tank_ids=(1, 2))
+    silo.on_signals(tanks_at(1.0, IDLE, IDLE))
+    silo.on_signals(tanks_at(2.0, DISPENSING, REFILLING))
+
+    closed = silo.on_tick(tick(4.0))
+
+    assert flags(closed_records(closed)) == [
+        (EventKind.DISPENSE, True, False),
+        (EventKind.REFILL, True, False),
+    ]
+
+
+def test_events_closed_on_shutdown_carry_their_flags() -> None:
+    silo = build_silo(1, tank_ids=(1, 2))
+    silo.on_signals(tanks_at(1.0, IDLE, IDLE))
+    silo.on_signals(tanks_at(2.0, DISPENSING, IDLE))
+    silo.on_signals(tanks_at(3.0, DISPENSING, DISPENSING))
+
+    closed = silo.on_shutdown()
+
+    assert flags(closed) == [
+        (EventKind.DISPENSE, True, True),
+        (EventKind.DISPENSE, True, True),
+    ]
+
+
+def test_orphaned_events_after_the_service_start_overlap_each_other() -> None:
+    silo = build_silo(1, tank_ids=(1, 2))
+    silo.on_signals(tanks_at(1.0, DISPENSING, REFILLING))
+
+    closed = silo.on_signals(tanks_at(2.0, IDLE, IDLE))
+
+    assert flags(closed_records(closed)) == [
+        (EventKind.DISPENSE, True, False),
+        (EventKind.REFILL, True, False),
+    ]

@@ -5,8 +5,14 @@ import pytest
 from structlog.testing import capture_logs
 
 from dms.acquisition.engine import Engine
-from dms.domain.events import ClosedEvent, StartedEvent
-from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.events import StartedEvent
+from dms.domain.records import (
+    EventRecord,
+    MeterRecord,
+    TemperatureRecord,
+    UnknownSensorRecord,
+    WriterRecord,
+)
 from dms.domain.temperature_error import TemperatureError
 from dms.logs import events
 from dms.messages import (
@@ -187,9 +193,9 @@ def test_started_and_closed_events_go_to_the_writer_queue() -> None:
 
     started, closed = [item for item in records(out_queue) if not isinstance(item, MeterRecord)]
     assert isinstance(started, StartedEvent)
-    assert isinstance(closed, ClosedEvent)
-    assert started.event_id == closed.event_id
-    assert (started.start_value_kg, closed.end_value_kg) == (500, 380)
+    assert isinstance(closed, EventRecord)
+    assert started.event_id == closed.event.event_id
+    assert (started.start_value_kg, closed.event.end_value_kg) == (500, 380)
 
 
 def test_started_and_completed_events_are_logged_with_the_delta() -> None:
@@ -207,6 +213,7 @@ def test_started_and_completed_events_are_logged_with_the_delta() -> None:
     assert event_logs[0]["event_id"] == "00000000-0000-0000-0000-000000000001"
     assert (event_logs[1]["delta_kg"], event_logs[1]["duration_s"]) == (-120, 4.5)
     assert (event_logs[1]["tank_id"], event_logs[1]["type"]) == (1, "dispense")
+    assert (event_logs[1]["collision"], event_logs[1]["rule_violation"]) == (False, False)
 
 
 def test_incomplete_event_is_logged_as_an_error_with_both_qualities() -> None:
@@ -231,6 +238,54 @@ def test_orphaned_event_is_logged_as_a_warning() -> None:
     (orphaned,) = [entry for entry in logs if entry["event"] == events.EVENT_ORPHANED]
     assert orphaned["log_level"] == "warning"
     assert [type(item) for item in records(out_queue)] == [StartedEvent]
+
+
+def two_tank_signals(mono_s: float, *dispensing: int) -> SignalStates:
+    mono_ns = round(mono_s * NS_PER_S)
+    return SignalStates(
+        tuple(TankSignals(tank_id, tank_id in dispensing, refill=False) for tank_id in (1, 2)),
+        mono_ns,
+        mono_ns,
+    )
+
+
+def test_rule_violation_is_logged_when_it_starts_and_on_both_closed_events() -> None:
+    out_queue: queue.Queue[WriterRecord] = queue.Queue()
+    engine = Engine(
+        in_queue=queue.Queue(),
+        out_queue=out_queue,
+        silos_by_meter={"m1": build_silo(1, tank_ids=(1, 2))},
+        stop_event=threading.Event(),
+    )
+    frames = [
+        two_tank_signals(1.0),
+        two_tank_signals(2.0, 1),
+        two_tank_signals(3.0, 1, 2),
+        two_tank_signals(4.0),
+    ]
+
+    with capture_logs() as logs:
+        for frame in frames:
+            engine.handle(frame)
+
+    (violation,) = [entry for entry in logs if entry["event"] == events.SILO_RULE_VIOLATION]
+    assert violation["log_level"] == "warning"
+    assert {key: violation[key] for key in ("silo_id", "type", "tank_id", "other_tank_id")} == {
+        "silo_id": 1,
+        "type": "dispense",
+        "tank_id": 2,
+        "other_tank_id": 1,
+    }
+    assert (violation["event_id"], violation["other_event_id"]) == (
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000001",
+    )
+    closed = [entry for entry in logs if entry["event"] == events.EVENT_INCOMPLETE]
+    assert [(entry["collision"], entry["rule_violation"]) for entry in closed] == [
+        (True, True),
+        (True, True),
+    ]
+    assert all(isinstance(item, StartedEvent | EventRecord) for item in records(out_queue))
 
 
 def test_lost_signals_log_the_state_before_the_closed_event_and_its_end() -> None:
@@ -260,8 +315,8 @@ def test_lost_signals_log_the_state_before_the_closed_event_and_its_end() -> Non
     assert (incomplete["start_quality"], incomplete["end_quality"]) == ("fresh", "signal_lost")
     ended = [entry for entry in logs if entry["event"] == events.SILO_SIGNALS_STALE_ENDED]
     assert ended[0]["duration_s"] == 4.0
-    closed = [item for item in records(out_queue) if isinstance(item, ClosedEvent)]
-    assert [item.end_quality for item in closed] == ["signal_lost"]
+    closed = [item for item in records(out_queue) if isinstance(item, EventRecord)]
+    assert [item.event.end_quality for item in closed] == ["signal_lost"]
 
 
 def test_handle_processes_a_message_without_the_queue() -> None:
@@ -301,8 +356,8 @@ def test_stop_closes_open_events_after_handling_the_queued_messages() -> None:
 
     started, closed = [item for item in records(out_queue) if not isinstance(item, MeterRecord)]
     assert isinstance(started, StartedEvent)
-    assert isinstance(closed, ClosedEvent)
-    assert (closed.end_quality, closed.end_wall_ns, closed.duration_ns) == (
+    assert isinstance(closed, EventRecord)
+    assert (closed.event.end_quality, closed.event.end_wall_ns, closed.event.duration_ns) == (
         "service_stopped",
         round(10.5 * NS_PER_S),
         round(0.5 * NS_PER_S),
@@ -343,7 +398,7 @@ def test_crash_of_the_engine_closes_no_open_events(monkeypatch: pytest.MonkeyPat
         engine.run()
 
     assert len(handled) == 3
-    assert [item for item in records(out_queue) if isinstance(item, ClosedEvent)] == []
+    assert [item for item in records(out_queue) if isinstance(item, EventRecord)] == []
 
 
 def build_with_temperatures() -> tuple[

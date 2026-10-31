@@ -9,7 +9,13 @@ from psycopg import errors
 from psycopg.rows import TupleRow
 
 from dms.domain.events import ClosedEvent, StartedEvent
-from dms.domain.records import MeterRecord, TemperatureRecord, UnknownSensorRecord, WriterRecord
+from dms.domain.records import (
+    EventRecord,
+    MeterRecord,
+    TemperatureRecord,
+    UnknownSensorRecord,
+    WriterRecord,
+)
 from dms.units import NS_PER_MS, NS_PER_US
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -39,8 +45,8 @@ INSERT_EVENT_START_SQL = (
 UPSERT_EVENT_END_SQL = (
     "INSERT INTO dms.tank_event"
     " (id, tank_id, run_id, type, origin, status, start_at, start_value_kg, start_quality,"
-    " end_at, end_value_kg, end_quality, duration_ms)"
-    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    " end_at, end_value_kg, end_quality, duration_ms, rule_violation, collision)"
+    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
     " ON CONFLICT (id) DO UPDATE SET"
     " status = EXCLUDED.status,"
     " start_at = EXCLUDED.start_at,"
@@ -49,7 +55,9 @@ UPSERT_EVENT_END_SQL = (
     " end_at = EXCLUDED.end_at,"
     " end_value_kg = EXCLUDED.end_value_kg,"
     " end_quality = EXCLUDED.end_quality,"
-    " duration_ms = EXCLUDED.duration_ms"
+    " duration_ms = EXCLUDED.duration_ms,"
+    " rule_violation = EXCLUDED.rule_violation,"
+    " collision = EXCLUDED.collision"
 )
 
 CLOSE_REJECTED_EVENT_SQL = (
@@ -146,7 +154,7 @@ class PostgresRecordStore:
         start_rows = [
             self._start_row(record) for record in records if isinstance(record, StartedEvent)
         ]
-        end_rows = [self._end_row(record) for record in records if isinstance(record, ClosedEvent)]
+        end_rows = [self._end_row(record) for record in records if isinstance(record, EventRecord)]
         with (
             _store_errors_translated(),
             self._connection.transaction(),
@@ -200,7 +208,8 @@ class PostgresRecordStore:
             event.start_quality,
         )
 
-    def _end_row(self, event: ClosedEvent) -> tuple[object, ...]:
+    def _end_row(self, record: EventRecord) -> tuple[object, ...]:
+        event = record.event
         return (
             event.event_id,
             event.tank_id,
@@ -215,6 +224,8 @@ class PostgresRecordStore:
             event.end_value_kg,
             event.end_quality,
             None if event.duration_ns is None else duration_ms_from_ns(event.duration_ns),
+            record.rule_violation,
+            record.collision,
         )
 
     def reconnect(self) -> None:
